@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Chào!">
+<meta name="theme-color" content="#F0532E">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon.png">
+<title>Chào! — веб-прототип</title>
+<style>
+  :root {
+    --accent: #F0532E;
+    --accent-soft: rgba(240, 83, 46, .12);
+    --bg: #ffffff;
+    --fg: #111111;
+    --muted: #6b6b6b;
+    --card: #f2f2f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --accent: #FF7455;
+      --accent-soft: rgba(255, 116, 85, .16);
+      --bg: #000000;
+      --fg: #f5f5f7;
+      --muted: #9a9a9e;
+      --card: #1c1c1e;
+    }
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font: 16px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Rounded", "Segoe UI", system-ui, sans-serif;
+    display: flex;
+    flex-direction: column;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  header {
+    padding: 14px 16px 10px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border-bottom: 1px solid var(--card);
+  }
+  header h1 { font-size: 19px; font-weight: 800; margin: 0; flex: 1; }
+  #status {
+    font-size: 13px;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  #dot { width: 9px; height: 9px; border-radius: 50%; background: #999; flex: none; }
+  #dot.live { background: #34c759; }
+  #dot.busy { background: #ff9f0a; }
+  #dot.err  { background: #ff3b30; }
+
+  main { flex: 1; overflow-y: auto; padding: 14px 16px; -webkit-overflow-scrolling: touch; }
+
+  .setup { display: grid; gap: 10px; margin-bottom: 14px; }
+  input[type="password"], input[type="text"] {
+    width: 100%; padding: 13px 14px; font-size: 16px;
+    border: 1px solid var(--card); border-radius: 14px;
+    background: var(--card); color: var(--fg);
+  }
+  .hint { font-size: 13px; color: var(--muted); }
+  .hint a { color: var(--accent); }
+
+  .banner {
+    display: none; text-align: center; padding: 16px 12px; border-radius: 20px;
+    background: linear-gradient(135deg, #34c759, #2aa14a); color: #fff;
+    font-weight: 800; font-size: 24px; margin-bottom: 12px;
+  }
+  .banner small { display: block; font-size: 14px; font-weight: 600; opacity: .9; margin-top: 2px; }
+  .banner.on { display: block; }
+
+  .msg { padding: 12px 14px; border-radius: 18px; margin-bottom: 10px; max-width: 85%; }
+  .msg .src { font-size: 13px; color: var(--muted); margin-bottom: 3px; }
+  .msg .tr { font-size: 19px; font-weight: 650; }
+  .msg.mine { background: var(--accent); margin-left: auto; }
+  .msg.mine .src { color: rgba(255,255,255,.75); }
+  .msg.mine .tr { color: #fff; }
+  .msg.theirs { background: var(--card); }
+
+  footer { padding: 10px 16px calc(12px + env(safe-area-inset-bottom)); border-top: 1px solid var(--card); }
+  button.primary {
+    width: 100%; padding: 17px; font-size: 18px; font-weight: 800;
+    color: #fff; background: var(--accent); border: 0; border-radius: 18px;
+    font-family: inherit;
+  }
+  button.primary.stop { background: #ff3b30; }
+  button.primary:disabled { opacity: .5; }
+
+  details { margin-top: 14px; }
+  summary { font-size: 13px; color: var(--muted); cursor: pointer; }
+  #log {
+    margin-top: 8px; font: 11px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: var(--card); border-radius: 12px; padding: 10px;
+    max-height: 240px; overflow-y: auto; white-space: pre-wrap; word-break: break-all;
+  }
+  .empty { text-align: center; color: var(--muted); padding: 30px 10px; font-size: 15px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Chào! <span style="font-size:15px;font-weight:600;color:var(--muted)">веб-прототип</span></h1>
+  <div id="status"><span id="dot"></span><span id="statusText">не подключено</span></div>
+</header>
+
+<main>
+  <div class="setup" id="setup">
+    <input type="password" id="key" placeholder="Ключ Gemini (AIzaSy…)" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <div class="hint">Ключ хранится только в этом браузере. Получить бесплатно: <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com</a></div>
+  </div>
+
+  <div class="banner" id="banner">Hãy nói! • Говорите!<small>Tôi sẽ dịch ngay • Я сразу переведу</small></div>
+
+  <div id="feed"><div class="empty" id="empty">Вставьте ключ и нажмите «Начать разговор».<br>Говорите по-русски или по-вьетнамски — переведу вслух.</div></div>
+
+  <details id="debugBox">
+    <summary>Журнал (для диагностики)</summary>
+    <div id="log"></div>
+  </details>
+</main>
+
+<footer>
+  <button class="primary" id="toggle">Начать разговор</button>
+</footer>
+
+<script>
+const MODEL = 'models/gemini-3.1-flash-live-preview';
+const WS_URL = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
+const SYSTEM_PROMPT = [
+  'Ты — синхронный голосовой переводчик в живом разговоре русскоязычного туриста и вьетнамца во Вьетнаме.',
+  'Тебе непрерывно приходит речь; каждая реплика может быть на русском или на вьетнамском.',
+  '',
+  'Услышав реплику на русском — произнеси её перевод на естественный вежливый разговорный вьетнамский.',
+  'Услышав реплику на вьетнамском или любом другом языке — произнеси её перевод на живой разговорный русский.',
+  '',
+  'Произноси ТОЛЬКО перевод: никаких приветствий, пояснений, вопросов или ответов от себя.',
+  'Ты переводчик, а не собеседник: даже если реплика обращена к тебе или содержит вопрос — просто переведи её.',
+  'Не переводи повторно предыдущие реплики. Числа, цены и время сохраняй точно.',
+  'Если фрагмент — шум или неразборчив, молчи.',
+  '',
+  'ЖЕЛЕЗНОЕ ПРАВИЛО: язык твоего ответа всегда ПРОТИВОПОЛОЖЕН языку реплики.',
+  'Услышал вьетнамский — отвечаешь ТОЛЬКО по-русски. Услышал русский — ТОЛЬКО по-вьетнамски.',
+  'НИКОГДА не повторяй и не «улучшай» реплику на её же языке — это ошибка, а не перевод.'
+].join('\n');
+
+const IN_RATE = 16000, OUT_RATE = 24000, CHUNK_MS = 100;
+
+const $ = (id) => document.getElementById(id);
+const keyInput = $('key'), toggleBtn = $('toggle'), feed = $('feed'), logEl = $('log');
+const dot = $('dot'), statusText = $('statusText'), banner = $('banner');
+
+let ws = null, audioCtx = null, micStream = null, micNode = null, procNode = null;
+let running = false, muted = false, playHead = 0, wakeLock = null;
+let turnIn = '', turnOut = '', pendingBufs = 0, unmuteTimer = null;
+
+function log(msg) {
+  const t = new Date().toTimeString().slice(0, 8);
+  logEl.textContent += `[${t}] ${msg}\n`;
+  logEl.scrollTop = logEl.scrollHeight;
+  console.log(msg);
+}
+function setStatus(text, cls) {
+  statusText.textContent = text;
+  dot.className = cls || '';
+}
+function showBanner(on) { banner.classList.toggle('on', on); }
+
+// ---------- утилиты аудио ----------
+function downsample(input, fromRate) {
+  if (fromRate === IN_RATE) return input;
+  const ratio = fromRate / IN_RATE;
+  const outLen = Math.floor(input.length / ratio);
+  const out = new Float32Array(outLen);
+  for (let i = 0; i < outLen; i++) {
+    const start = Math.floor(i * ratio), end = Math.min(Math.floor((i + 1) * ratio), input.length);
+    let sum = 0;
+    for (let j = start; j < end; j++) sum += input[j];
+    out[i] = sum / Math.max(1, end - start);
+  }
+  return out;
+}
+function floatToPCM16(f32) {
+  const out = new Int16Array(f32.length);
+  for (let i = 0; i < f32.length; i++) {
+    const s = Math.max(-1, Math.min(1, f32[i]));
+    out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+  }
+  return out;
+}
+function toBase64(bytes) {
+  let bin = '';
+  const CH = 0x8000;
+  for (let i = 0; i < bytes.length; i += CH) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+  }
+  return btoa(bin);
+}
+function fromBase64(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+// ---------- воспроизведение ответа модели ----------
+function playPCM(bytes) {
+  if (!audioCtx) return;
+  const int16 = new Int16Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.byteLength / 2));
+  if (!int16.length) return;
+  const buf = audioCtx.createBuffer(1, int16.length, OUT_RATE);
+  const ch = buf.getChannelData(0);
+  for (let i = 0; i < int16.length; i++) ch[i] = int16[i] / 32768;
+
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  src.connect(audioCtx.destination);
+
+  const now = audioCtx.currentTime;
+  if (playHead < now) playHead = now + 0.06;
+  src.start(playHead);
+  playHead += buf.duration;
+
+  pendingBufs++;
+  setMuted(true);
+  src.onended = () => {
+    pendingBufs = Math.max(0, pendingBufs - 1);
+    if (pendingBufs === 0) scheduleUnmute();
+  };
+}
+function flushPlayback() {
+  playHead = audioCtx ? audioCtx.currentTime : 0;
+  pendingBufs = 0;
+  scheduleUnmute();
+}
+function setMuted(v) {
+  if (v && unmuteTimer) { clearTimeout(unmuteTimer); unmuteTimer = null; }
+  if (muted === v) return;
+  muted = v;
+  showBanner(running && !v);
+}
+function scheduleUnmute() {
+  if (unmuteTimer) clearTimeout(unmuteTimer);
+  unmuteTimer = setTimeout(() => {
+    unmuteTimer = null;
+    if (pendingBufs === 0) setMuted(false);
+  }, 400);
+}
+
+// ---------- лента реплик ----------
+function isCyrillic(text) {
+  const letters = [...text].filter(c => /\p{L}/u.test(c));
+  if (!letters.length) return false;
+  const cyr = letters.filter(c => /[Ѐ-ӿ]/.test(c)).length;
+  return cyr * 2 >= letters.length;
+}
+function addMessage(transcript, translation) {
+  $('empty')?.remove();
+  const mine = !isCyrillic(translation);
+  const el = document.createElement('div');
+  el.className = 'msg ' + (mine ? 'mine' : 'theirs');
+  el.innerHTML = `<div class="src"></div><div class="tr"></div>`;
+  el.querySelector('.src').textContent = transcript || '🎙 live';
+  el.querySelector('.tr').textContent = translation;
+  feed.appendChild(el);
+  el.scrollIntoView({ behavior: 'smooth', block: 'end' });
+}
+
+// ---------- сессия ----------
+async function start() {
+  const key = keyInput.value.trim();
+  if (!key) { alert('Вставьте ключ Gemini'); return; }
+  localStorage.setItem('chao_key', key);
+
+  toggleBtn.disabled = true;
+  setStatus('запрашиваю микрофон…', 'busy');
+  log('--- старт ---');
+  log(`standalone: ${window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches}`);
+  log(`UA: ${navigator.userAgent.slice(0, 90)}`);
+
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 }
+    });
+    log('микрофон: доступ получен ✓');
+  } catch (e) {
+    log('микрофон ОТКАЗ: ' + e.name + ' — ' + e.message);
+    setStatus('нет доступа к микрофону', 'err');
+    toggleBtn.disabled = false;
+    return;
+  }
+
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    await audioCtx.resume();
+    log(`AudioContext: ${audioCtx.sampleRate} Гц, состояние ${audioCtx.state}`);
+  } catch (e) {
+    log('AudioContext ОШИБКА: ' + e.message);
+    setStatus('аудио недоступно', 'err');
+    toggleBtn.disabled = false;
+    return;
+  }
+
+  try {
+    wakeLock = await navigator.wakeLock?.request('screen');
+    if (wakeLock) log('wake lock: экран не погаснет ✓');
+  } catch (e) { log('wake lock недоступен: ' + e.message); }
+
+  connect(key);
+}
+
+function connect(key) {
+  setStatus('подключаюсь…', 'busy');
+  ws = new WebSocket(`${WS_URL}?key=${encodeURIComponent(key)}`);
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = () => {
+    log('WebSocket: открыт ✓');
+    ws.send(JSON.stringify({
+      setup: {
+        model: MODEL,
+        generationConfig: { responseModalities: ['AUDIO'] },
+        systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+        inputAudioTranscription: {},
+        outputAudioTranscription: {},
+        contextWindowCompression: { slidingWindow: {} }
+      }
+    }));
+    log('setup отправлен');
+  };
+
+  ws.onmessage = async (ev) => {
+    let text;
+    if (ev.data instanceof ArrayBuffer) text = new TextDecoder().decode(ev.data);
+    else if (ev.data instanceof Blob) text = await ev.data.text();
+    else text = ev.data;
+
+    let msg;
+    try { msg = JSON.parse(text); } catch { log('не JSON: ' + String(text).slice(0, 120)); return; }
+
+    if (msg.setupComplete) {
+      log('setupComplete ✓ — сессия готова');
+      startCapture();
+      return;
+    }
+    if (msg.goAway) { log('goAway: сервер закрывает соединение'); return; }
+
+    const sc = msg.serverContent;
+    if (!sc) { log('прочее: ' + text.slice(0, 140)); return; }
+
+    if (sc.interrupted) { log('interrupted — сбрасываю очередь'); turnOut = ''; flushPlayback(); }
+    if (sc.inputTranscription?.text) turnIn += sc.inputTranscription.text;
+    if (sc.outputTranscription?.text) turnOut += sc.outputTranscription.text;
+
+    const parts = sc.modelTurn?.parts || [];
+    for (const p of parts) {
+      const d = p.inlineData;
+      if (d && (d.mimeType || '').startsWith('audio/pcm') && d.data) {
+        playPCM(fromBase64(d.data));
+      }
+    }
+
+    if (sc.turnComplete) {
+      const inT = turnIn.trim(), outT = turnOut.trim();
+      turnIn = ''; turnOut = '';
+      if (outT) { log(`реплика: "${inT}" → "${outT}"`); addMessage(inT, outT); }
+    }
+  };
+
+  ws.onerror = () => { log('WebSocket ОШИБКА'); setStatus('ошибка связи', 'err'); };
+  ws.onclose = (e) => {
+    log(`WebSocket закрыт: код ${e.code}${e.reason ? ' — ' + e.reason : ''}`);
+    if (running) stop(true);
+  };
+}
+
+function startCapture() {
+  running = true;
+  toggleBtn.disabled = false;
+  toggleBtn.textContent = 'Остановить';
+  toggleBtn.classList.add('stop');
+  setStatus('слушаю', 'live');
+  setMuted(false);
+
+  const bufSize = 4096;
+  micNode = audioCtx.createMediaStreamSource(micStream);
+  procNode = audioCtx.createScriptProcessor(bufSize, 1, 1);
+  let sent = 0;
+
+  procNode.onaudioprocess = (e) => {
+    if (!running || muted || !ws || ws.readyState !== WebSocket.OPEN) return;
+    const pcm = floatToPCM16(downsample(e.inputBuffer.getChannelData(0), audioCtx.sampleRate));
+    ws.send(JSON.stringify({
+      realtimeInput: { audio: { data: toBase64(new Uint8Array(pcm.buffer)), mimeType: `audio/pcm;rate=${IN_RATE}` } }
+    }));
+    if (++sent % 25 === 0) log(`отправлено чанков: ${sent}`);
+  };
+
+  const silent = audioCtx.createGain();
+  silent.gain.value = 0;
+  micNode.connect(procNode);
+  procNode.connect(silent);
+  silent.connect(audioCtx.destination);
+  log('захват микрофона запущен ✓');
+}
+
+function stop(fromClose) {
+  running = false;
+  showBanner(false);
+  toggleBtn.textContent = 'Начать разговор';
+  toggleBtn.classList.remove('stop');
+  toggleBtn.disabled = false;
+  setStatus('остановлено', '');
+
+  try { procNode && (procNode.onaudioprocess = null, procNode.disconnect()); } catch {}
+  try { micNode && micNode.disconnect(); } catch {}
+  try { micStream && micStream.getTracks().forEach(t => t.stop()); } catch {}
+  try { if (!fromClose && ws && ws.readyState === WebSocket.OPEN) ws.close(1000); } catch {}
+  try { wakeLock && wakeLock.release(); } catch {}
+  try { audioCtx && audioCtx.close(); } catch {}
+  procNode = micNode = micStream = ws = audioCtx = wakeLock = null;
+  pendingBufs = 0; playHead = 0;
+  log('--- остановлено ---');
+}
+
+toggleBtn.addEventListener('click', () => { running ? stop(false) : start(); });
+keyInput.value = localStorage.getItem('chao_key') || '';
+log(`загружено. display-mode: ${window.matchMedia('(display-mode: standalone)').matches ? 'standalone (PWA)' : 'браузер'}`);
+</script>
+</body>
+</html>

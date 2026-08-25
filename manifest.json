@@ -1,0 +1,14 @@
+{
+  "name": "Chào! — переводчик",
+  "short_name": "Chào!",
+  "description": "Живой перевод русский ↔ вьетнамский",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#000000",
+  "theme_color": "#F0532E",
+  "icons": [
+    { "src": "icon.png", "sizes": "1024x1024", "type": "image/png", "purpose": "any" },
+    { "src": "icon.png", "sizes": "1024x1024", "type": "image/png", "purpose": "maskable" }
+  ]
+}
