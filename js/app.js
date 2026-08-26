@@ -1,15 +1,15 @@
 // Chào! — веб-версия. Диалог (живой перевод, запись, текст), фото, история, настройки.
 
-import { store } from './store.js?v=202608261505';
-import { gemini, LiveSession } from './gemini.js?v=202608261505';
-import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608261505';
-import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608261505';
-import { iconSVG, renderIcons } from './icons.js?v=202608261505';
-import { PHRASES } from './phrases.js?v=202608261505';
-import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202608261505';
+import { store } from './store.js?v=202608261509';
+import { gemini, LiveSession } from './gemini.js?v=202608261509';
+import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608261509';
+import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608261509';
+import { iconSVG, renderIcons } from './icons.js?v=202608261509';
+import { PHRASES } from './phrases.js?v=202608261509';
+import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202608261509';
 
 const $ = (id) => document.getElementById(id);
-const VERSION = '202608261505';
+const VERSION = '202608261509';
 
 let deferredInstall = null;
 addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredInstall = e; });
@@ -36,12 +36,6 @@ function boot() {
 
   // онбординг — пошаговый мастер
   initOnboarding();
-
-  $('obSave').addEventListener('click', () => {
-    store.setKey($('obKey').value);
-    showApp();
-    toast('Ключ сохранён. Можно говорить!');
-  });
 
   // вкладки
   document.querySelectorAll('.tab').forEach(btn => {
@@ -867,4 +861,13 @@ function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-document.addEventListener('DOMContentLoaded', boot);
+document.addEventListener('DOMContentLoaded', () => {
+  try {
+    boot();
+  } catch (e) {
+    // Интерфейс не должен оставаться полупустым из-за одной ошибки
+    log('ошибка запуска: ' + e.message);
+    try { renderIcons(); renderFeed(); } catch {}
+    toast('Что-то пошло не так при запуске. Загляните в журнал в настройках.');
+  }
+});
