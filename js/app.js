@@ -4,6 +4,7 @@ import { store } from './store.js';
 import { gemini, LiveSession } from './gemini.js';
 import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js';
 import { log, toast, isMostlyCyrillic, fmtDate, plural } from './util.js';
+import { iconSVG, renderIcons } from './icons.js';
 
 const $ = (id) => document.getElementById(id);
 const VERSION = '1.0';
@@ -94,6 +95,7 @@ function boot() {
     if (document.hidden && liveOn) { stopLive(); toast('Живой перевод выключен: приложение свернули'); }
   });
 
+  renderIcons();
   renderFeed();
   updateStorageInfo();
   if ('speechSynthesis' in window) speechSynthesis.getVoices();
@@ -120,7 +122,7 @@ function renderFeed() {
   const feed = $('feed');
   if (!messages.length) {
     feed.innerHTML = `<div class="empty">
-      <div class="empty-icon">💬</div><h3>Chào! 👋</h3>
+      <div class="empty-icon">${iconSVG('chat', 52)}</div><h3>Chào! 👋</h3>
       <p>Скажите фразу по-русски — озвучу её по-вьетнамски. Собеседник ответит в микрофон — вы прочтёте по-русски.</p>
       <div class="chip">Волна — живой перевод без пауз</div></div>`;
     return;
@@ -131,7 +133,7 @@ function renderFeed() {
     el.className = `msg ${m.sourceLanguage === 'ru' ? 'mine' : 'theirs'}${m.pending ? ' pending' : ''}`;
     const src = document.createElement('div');
     src.className = 'src';
-    src.textContent = m.transcript || '🎙 live';
+    src.textContent = m.transcript || 'живой перевод';
     const tr = document.createElement('div');
     tr.className = 'tr';
     tr.textContent = m.translation;
@@ -269,6 +271,7 @@ async function toggleRecording() {
   if (recording) {
     recording = false;
     $('micBtn').classList.remove('rec');
+    $('micBtn').innerHTML = iconSVG('mic', 25);
     showBanner(false);
     const wav = mic.stopRecording();
     mic.stop();
@@ -286,6 +289,7 @@ async function toggleRecording() {
   mic.startRecording();
   recording = true;
   $('micBtn').classList.add('rec');
+  $('micBtn').innerHTML = iconSVG('stop', 24);
   showBanner(true, true);
   setStatus('идёт запись — нажмите ещё раз, когда закончите', '', 'Отмена');
 }
@@ -296,6 +300,7 @@ function cancelRecording() {
   mic.stopRecording();
   mic.stop();
   $('micBtn').classList.remove('rec');
+  $('micBtn').innerHTML = iconSVG('mic', 25);
   showBanner(false);
   setStatus('');
 }
@@ -413,12 +418,12 @@ function dishHTML(dish, interactive) {
   const count = photo.order.get(key) || 0;
   return `<div class="dish${count ? ' on' : ''}" data-key="${escapeHtml(key)}">
     <div class="dish-top">
-      <div class="dish-name">${count ? '✓ ' : ''}${escapeHtml(dish.translation)}</div>
+      <div class="dish-name">${count ? iconSVG('check', 17) : ''}${escapeHtml(dish.translation)}</div>
       ${dish.price ? `<div class="dish-price">${escapeHtml(dish.price)}</div>` : ''}
     </div>
     <div class="dish-orig">${escapeHtml(dish.original)}</div>
     ${dish.ingredients ? `<div class="dish-ing">${escapeHtml(dish.ingredients)}</div>` : ''}
-    ${count && interactive ? `<div class="counter"><button data-act="minus">−</button><b>${count}</b><button data-act="plus">+</button></div>` : ''}
+    ${count && interactive ? `<div class="counter"><button data-act="minus" aria-label="меньше">${iconSVG('minus', 26)}</button><b>${count}</b><button data-act="plus" aria-label="больше">${iconSVG('plus', 26)}</button></div>` : ''}
   </div>`;
 }
 
@@ -440,7 +445,7 @@ function bindDishHandlers(box) {
 function updateOrderBar() {
   const total = [...photo.order.values()].reduce((a, b) => a + b, 0);
   $('orderBar').classList.toggle('hidden', total === 0);
-  $('orderBtn').textContent = `🖐 Показать заказ официанту · ${total}`;
+  $('orderLabel').textContent = `Показать заказ официанту · ${total}`;
 }
 
 function showOrder() {
@@ -483,7 +488,7 @@ function openHistory(seg) {
       const el = document.createElement('div');
       el.className = 'hist-item';
       el.innerHTML = `<div class="info"><b></b><small>${fmtDate(s.startedAt)} · ${plural(s.messages.length, 'реплика', 'реплики', 'реплик')}</small></div>
-                      <button class="del">🗑</button>`;
+                      <button class="del" aria-label="удалить">${iconSVG('trash', 19)}</button>`;
       el.querySelector('b').textContent = title;
       el.querySelector('.del').addEventListener('click', (e) => { e.stopPropagation(); store.removeSession(s.id); openHistory('dialogs'); });
       el.addEventListener('click', () => {
@@ -504,7 +509,7 @@ function openHistory(seg) {
         : `документ · ${plural((p.result.blocks || []).length, 'фрагмент', 'фрагмента', 'фрагментов')}`;
       const el = document.createElement('div');
       el.className = 'hist-item';
-      el.innerHTML = `<img class="thumb" src="${p.thumb}"><div class="info"><b>${p.result.isMenu ? 'Меню' : 'Документ'}</b><small>${fmtDate(p.ts)} · ${count}</small></div><button class="del">🗑</button>`;
+      el.innerHTML = `<img class="thumb" src="${p.thumb}"><div class="info"><b>${p.result.isMenu ? 'Меню' : 'Документ'}</b><small>${fmtDate(p.ts)} · ${count}</small></div><button class="del" aria-label="удалить">${iconSVG('trash', 19)}</button>`;
       el.querySelector('.del').addEventListener('click', (e) => { e.stopPropagation(); store.removePhoto(p.id); openHistory('menus'); });
       el.addEventListener('click', () => {
         box.innerHTML = `<img class="preview" src="${p.thumb}">` + renderResultHTML(p.result, false);
@@ -522,9 +527,9 @@ async function checkKey() {
   $('setStatus').textContent = 'Проверяю…';
   try {
     await gemini.checkKey(key);
-    $('setStatus').textContent = '✅ Работает!';
+    $('setStatus').innerHTML = `<span class="status-icon ok">${iconSVG('check', 17)}</span>Работает!`;
   } catch (e) {
-    $('setStatus').textContent = '❌ ' + e.message;
+    $('setStatus').innerHTML = `<span class="status-icon bad">${iconSVG('close', 15)}</span>${escapeHtml(e.message)}`;
   }
 }
 

@@ -25,7 +25,7 @@
       <li><span>2</span><p>Нажмите «Create API key». Если попросит проект — создайте новый, имя любое. Это бесплатно.</p></li>
       <li><span>3</span><p>Скопируйте ключ (начинается с AIzaSy) и вставьте сюда.</p></li>
     </ol>
-    <a class="btn ghost" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Открыть Google AI Studio ↗</a>
+    <a class="btn ghost" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Открыть Google AI Studio<span data-icon="external" data-icon-size="17"></span></a>
     <input type="password" id="obKey" placeholder="Вставьте ключ (AIzaSy…)" autocomplete="off" autocapitalize="off" spellcheck="false">
     <button class="btn primary" id="obSave" disabled>Начать</button>
     <p class="fine">Ключ хранится только на этом устройстве и отправляется только в Google.</p>
@@ -38,14 +38,14 @@
   <!-- ДИАЛОГ -->
   <section class="screen" id="tab-dialog">
     <header class="bar">
-      <button class="icon-btn" id="histBtn" title="История">🕘</button>
+      <button class="icon-btn" id="histBtn" title="История"><span data-icon="history" data-icon-size="21"></span></button>
       <h2>Диалог</h2>
-      <button class="icon-btn" id="newBtn" title="Новый разговор">✎</button>
+      <button class="icon-btn" id="newBtn" title="Новый разговор"><span data-icon="edit" data-icon-size="20"></span></button>
     </header>
     <div class="banner" id="speakBanner">Hãy nói! • Говорите!<small>Tôi sẽ dịch ngay • Я сразу переведу</small></div>
     <div class="content" id="feed">
       <div class="empty" id="feedEmpty">
-        <div class="empty-icon">💬</div>
+        <div class="empty-icon" data-icon="chat" data-icon-size="52"></div>
         <h3>Chào! 👋</h3>
         <p>Скажите фразу по-русски — озвучу её по-вьетнамски. Собеседник ответит в микрофон — вы прочтёте по-русски.</p>
         <div class="chip">Волна — живой перевод без пауз</div>
@@ -54,9 +54,9 @@
     <div class="statusline hidden" id="statusLine"><span class="dot"></span><span id="statusText"></span><button id="statusAction">Выключить</button></div>
     <footer class="inputbar">
       <input type="text" id="textInput" placeholder="Написать по-русски…" autocomplete="off">
-      <button class="round live" id="liveBtn" title="Живой перевод">〰️</button>
-      <button class="round mic" id="micBtn" title="Записать фразу">🎙</button>
-      <button class="round send hidden" id="sendBtn" title="Отправить">↑</button>
+      <button class="round live" id="liveBtn" title="Живой перевод"><span data-icon="wave" data-icon-size="26"></span></button>
+      <button class="round mic" id="micBtn" title="Записать фразу"><span data-icon="mic" data-icon-size="25"></span></button>
+      <button class="round send hidden" id="sendBtn" title="Отправить"><span data-icon="arrowUp" data-icon-size="25"></span></button>
     </footer>
   </section>
 
@@ -65,14 +65,14 @@
     <header class="bar"><h2>Фото</h2></header>
     <div class="content" id="photoContent">
       <div class="pickers">
-        <button class="btn primary" id="cameraBtn">📷 Камера</button>
-        <button class="btn ghost" id="galleryBtn">🖼 Галерея</button>
+        <button class="btn primary" id="cameraBtn"><span data-icon="camera" data-icon-size="20"></span>Камера</button>
+        <button class="btn ghost" id="galleryBtn"><span data-icon="image" data-icon-size="20"></span>Галерея</button>
       </div>
       <input type="file" id="fileCamera" accept="image/*" capture="environment" hidden>
       <input type="file" id="fileGallery" accept="image/*" hidden>
       <div id="photoResult"></div>
     </div>
-    <div class="orderbar hidden" id="orderBar"><button class="btn primary" id="orderBtn">🖐 Показать заказ официанту</button></div>
+    <div class="orderbar hidden" id="orderBar"><button class="btn primary" id="orderBtn"><span data-icon="hand" data-icon-size="20"></span><span id="orderLabel">Показать заказ официанту</span></button></div>
   </section>
 
   <!-- НАСТРОЙКИ -->
@@ -87,7 +87,7 @@
           <button class="btn ghost small" id="setCheck">Проверить</button>
         </div>
         <p class="fine" id="setStatus">Ключ хранится только на этом устройстве.</p>
-        <a class="fine link" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Получить бесплатный ключ ↗</a>
+        <a class="fine link inline" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Получить бесплатный ключ<span data-icon="external" data-icon-size="14"></span></a>
       </div>
       <div class="card">
         <h4>Установить как приложение</h4>
@@ -104,19 +104,19 @@
   </section>
 
   <nav class="tabbar">
-    <button class="tab active" data-tab="dialog"><span>💬</span>Диалог</button>
-    <button class="tab" data-tab="photo"><span>📷</span>Фото</button>
-    <button class="tab" data-tab="settings"><span>⚙️</span>Настройки</button>
+    <button class="tab active" data-tab="dialog"><span data-icon="chat" data-icon-size="23"></span>Диалог</button>
+    <button class="tab" data-tab="photo"><span data-icon="scan" data-icon-size="23"></span>Фото</button>
+    <button class="tab" data-tab="settings"><span data-icon="gear" data-icon-size="23"></span>Настройки</button>
   </nav>
 </div>
 
 <!-- ПОЛНОЭКРАННЫЙ ПОКАЗ -->
 <div class="overlay hidden" id="bigView">
-  <button class="close" id="bigClose">✕</button>
+  <button class="close" id="bigClose"><span data-icon="close" data-icon-size="18"></span></button>
   <div class="big-inner">
     <p class="big-src" id="bigSrc"></p>
     <p class="big-tr" id="bigTr"></p>
-    <button class="btn white" id="bigSpeak">🔊 Озвучить</button>
+    <button class="btn white" id="bigSpeak"><span data-icon="speaker" data-icon-size="21"></span>Озвучить</button>
   </div>
 </div>
 
@@ -124,7 +124,7 @@
 <div class="overlay sheet hidden" id="history">
   <header class="bar">
     <h2>История</h2>
-    <button class="icon-btn" id="histClose">✕</button>
+    <button class="icon-btn" id="histClose"><span data-icon="close" data-icon-size="18"></span></button>
   </header>
   <div class="segmented">
     <button class="seg active" data-seg="dialogs">Диалоги</button>
