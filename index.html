@@ -10,7 +10,7 @@
 <meta name="theme-color" content="#F0532E">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon.png">
-<link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="css/style.css?v=202608261300">
 <title>Chào! — переводчик</title>
 </head>
 <body>
@@ -23,10 +23,10 @@
     <ol class="steps">
       <li><span>1</span><p>Откройте Google AI Studio (кнопка ниже) и войдите аккаунтом Google.</p></li>
       <li><span>2</span><p>Нажмите «Create API key». Если попросит проект — создайте новый, имя любое. Это бесплатно.</p></li>
-      <li><span>3</span><p>Скопируйте ключ (начинается с AIzaSy) и вставьте сюда.</p></li>
+      <li><span>3</span><p>Скопируйте созданный ключ целиком и вставьте сюда.</p></li>
     </ol>
     <a class="btn ghost" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Открыть Google AI Studio<span data-icon="external" data-icon-size="17"></span></a>
-    <input type="password" id="obKey" placeholder="Вставьте ключ (AIzaSy…)" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <input type="password" id="obKey" placeholder="Вставьте ключ сюда" autocomplete="off" autocapitalize="off" spellcheck="false">
     <button class="btn primary" id="obSave" disabled>Начать</button>
     <p class="fine">Ключ хранится только на этом устройстве и отправляется только в Google.</p>
   </div>
@@ -64,15 +64,23 @@
   <section class="screen hidden" id="tab-photo">
     <header class="bar"><h2>Фото</h2></header>
     <div class="content" id="photoContent">
+      <input type="file" id="fileCamera" accept="image/*" capture="environment" hidden>
+      <input type="file" id="fileGallery" accept="image/*" hidden>
+      <div id="photoResult">
+        <div class="empty">
+          <div class="empty-icon" data-icon="scan" data-icon-size="52"></div>
+          <h3>Что тут написано?</h3>
+          <p>Снимите меню — разберу блюда и помогу собрать заказ.<br>Снимите документ или вывеску — переведу и объясню суть.</p>
+        </div>
+      </div>
+    </div>
+    <footer class="photobar">
+      <button class="btn primary order hidden" id="orderBtn"><span data-icon="hand" data-icon-size="20"></span><span id="orderLabel">Показать заказ официанту</span></button>
       <div class="pickers">
         <button class="btn primary" id="cameraBtn"><span data-icon="camera" data-icon-size="20"></span>Камера</button>
         <button class="btn ghost" id="galleryBtn"><span data-icon="image" data-icon-size="20"></span>Галерея</button>
       </div>
-      <input type="file" id="fileCamera" accept="image/*" capture="environment" hidden>
-      <input type="file" id="fileGallery" accept="image/*" hidden>
-      <div id="photoResult"></div>
-    </div>
-    <div class="orderbar hidden" id="orderBar"><button class="btn primary" id="orderBtn"><span data-icon="hand" data-icon-size="20"></span><span id="orderLabel">Показать заказ официанту</span></button></div>
+    </footer>
   </section>
 
   <!-- НАСТРОЙКИ -->
@@ -81,7 +89,7 @@
     <div class="content">
       <div class="card">
         <h4>API-ключ Gemini</h4>
-        <input type="password" id="setKey" placeholder="AIzaSy…" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <input type="password" id="setKey" placeholder="Ключ Gemini" autocomplete="off" autocapitalize="off" spellcheck="false">
         <div class="row">
           <button class="btn ghost small" id="setSave">Сохранить</button>
           <button class="btn ghost small" id="setCheck">Проверить</button>
@@ -135,6 +143,6 @@
 
 <div id="toast" class="toast hidden"></div>
 
-<script type="module" src="js/app.js"></script>
+<script type="module" src="js/app.js?v=202608261300"></script>
 </body>
 </html>

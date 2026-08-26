@@ -1,13 +1,13 @@
 // Chào! — веб-версия. Диалог (живой перевод, запись, текст), фото, история, настройки.
 
-import { store } from './store.js';
-import { gemini, LiveSession } from './gemini.js';
-import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js';
-import { log, toast, isMostlyCyrillic, fmtDate, plural } from './util.js';
-import { iconSVG, renderIcons } from './icons.js';
+import { store } from './store.js?v=202608261300';
+import { gemini, LiveSession } from './gemini.js?v=202608261300';
+import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608261300';
+import { log, toast, isMostlyCyrillic, fmtDate, plural } from './util.js?v=202608261300';
+import { iconSVG, renderIcons } from './icons.js?v=202608261300';
 
 const $ = (id) => document.getElementById(id);
-const VERSION = '1.0';
+const VERSION = '202608261300';
 
 const mic = new Microphone();
 const player = new Player(onModelSpeaking);
@@ -347,7 +347,7 @@ function newSession() {
 async function handlePhoto(file) {
   if (!file) return;
   photo = { dataUrl: null, result: null, order: new Map() };
-  $('orderBar').classList.add('hidden');
+  $('orderBtn').classList.add('hidden');
   $('photoResult').innerHTML = `<div class="loading"><div class="spinner"></div>Читаю фото…</div>`;
 
   try {
@@ -376,6 +376,12 @@ async function savePhotoToHistory(dataUrl, result) {
 function renderPhoto() {
   const box = $('photoResult');
   box.innerHTML = '';
+  if (!photo.dataUrl && !photo.result) {
+    box.innerHTML = `<div class="empty"><div class="empty-icon">${iconSVG('scan', 52)}</div>
+      <h3>Что тут написано?</h3>
+      <p>Снимите меню — разберу блюда и помогу собрать заказ.<br>Снимите документ или вывеску — переведу и объясню суть.</p></div>`;
+    return;
+  }
   if (photo.dataUrl) {
     const img = document.createElement('img');
     img.className = 'preview';
@@ -444,7 +450,7 @@ function bindDishHandlers(box) {
 
 function updateOrderBar() {
   const total = [...photo.order.values()].reduce((a, b) => a + b, 0);
-  $('orderBar').classList.toggle('hidden', total === 0);
+  $('orderBtn').classList.toggle('hidden', total === 0);
   $('orderLabel').textContent = `Показать заказ официанту · ${total}`;
 }
 
