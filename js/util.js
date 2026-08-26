@@ -61,3 +61,8 @@ export function plural(n, one, few, many) {
   if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return `${n} ${few}`;
   return `${n} ${many}`;
 }
+
+/** Короткая вибрация как подтверждение действия (Android; iOS игнорирует). */
+export function haptic(pattern = 12) {
+  try { navigator.vibrate?.(pattern); } catch {}
+}

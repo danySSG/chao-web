@@ -1,13 +1,13 @@
 // Chào! — веб-версия. Диалог (живой перевод, запись, текст), фото, история, настройки.
 
-import { store } from './store.js?v=202608261300';
-import { gemini, LiveSession } from './gemini.js?v=202608261300';
-import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608261300';
-import { log, toast, isMostlyCyrillic, fmtDate, plural } from './util.js?v=202608261300';
-import { iconSVG, renderIcons } from './icons.js?v=202608261300';
+import { store } from './store.js?v=202608261407';
+import { gemini, LiveSession } from './gemini.js?v=202608261407';
+import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608261407';
+import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608261407';
+import { iconSVG, renderIcons } from './icons.js?v=202608261407';
 
 const $ = (id) => document.getElementById(id);
-const VERSION = '202608261300';
+const VERSION = '202608261407';
 
 const mic = new Microphone();
 const player = new Player(onModelSpeaking);
@@ -122,7 +122,7 @@ function renderFeed() {
   const feed = $('feed');
   if (!messages.length) {
     feed.innerHTML = `<div class="empty">
-      <div class="empty-icon">${iconSVG('chat', 52)}</div><h3>Chào! 👋</h3>
+      <div class="empty-icon">${iconSVG('chat', 52)}</div><h3>Chào!</h3>
       <p>Скажите фразу по-русски — озвучу её по-вьетнамски. Собеседник ответит в микрофон — вы прочтёте по-русски.</p>
       <div class="chip">Волна — живой перевод без пауз</div></div>`;
     return;
@@ -210,6 +210,7 @@ async function toggleLive() {
   mic.onChunk = (b64) => live?.sendAudio(b64);
 
   liveOn = true;
+  haptic([10, 40, 10]);
   $('liveBtn').disabled = false;
   $('liveBtn').classList.add('on');
   $('micBtn').disabled = true;
@@ -269,6 +270,7 @@ async function repairTurn(transcript) {
 async function toggleRecording() {
   if (liveOn) return;
   if (recording) {
+    haptic(14);
     recording = false;
     $('micBtn').classList.remove('rec');
     $('micBtn').innerHTML = iconSVG('mic', 25);
@@ -287,6 +289,7 @@ async function toggleRecording() {
     return;
   }
   mic.startRecording();
+  haptic(14);
   recording = true;
   $('micBtn').classList.add('rec');
   $('micBtn').innerHTML = iconSVG('stop', 24);
@@ -401,7 +404,7 @@ function renderPhoto() {
 function renderResultHTML(r, interactive) {
   let html = '';
   if (r.isMenu) {
-    if (interactive) html += `<div class="hint-tap">Тапните блюда, чтобы собрать заказ 👇</div>`;
+    if (interactive) html += `<div class="hint-tap">Тапните блюда, чтобы собрать заказ</div>`;
     for (const section of r.sections || []) {
       if (section.title) html += `<div class="section-title">${escapeHtml(section.title.toUpperCase())}</div>`;
       for (const dish of section.items || []) {
@@ -442,7 +445,7 @@ function bindDishHandlers(box) {
       if (act === 'plus') photo.order.set(key, Math.min(cur + 1, 20));
       else if (act === 'minus') { if (cur <= 1) photo.order.delete(key); else photo.order.set(key, cur - 1); }
       else if (cur) photo.order.delete(key);
-      else photo.order.set(key, 1);
+      else { photo.order.set(key, 1); haptic(10); }
       renderPhoto();
     });
   });
