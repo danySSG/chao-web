@@ -10,7 +10,7 @@
 <meta name="theme-color" content="#F0532E">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon.png">
-<link rel="stylesheet" href="css/style.css?v=202608261444">
+<link rel="stylesheet" href="css/style.css?v=202608261450">
 <title>Chào! — переводчик</title>
 </head>
 <body>
@@ -160,8 +160,20 @@
   <div class="content" id="phrasesContent"></div>
 </div>
 
+<!-- ПОДТВЕРЖДЕНИЕ -->
+<div class="modal-backdrop hidden" id="confirmBox">
+  <div class="modal">
+    <h3 id="confirmTitle"></h3>
+    <p id="confirmText"></p>
+    <div class="modal-actions">
+      <button class="btn ghost" id="confirmNo">Отмена</button>
+      <button class="btn primary danger-btn" id="confirmYes">Удалить</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast" class="toast hidden"></div>
 
-<script type="module" src="js/app.js?v=202608261444"></script>
+<script type="module" src="js/app.js?v=202608261450"></script>
 </body>
 </html>

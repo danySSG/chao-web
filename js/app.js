@@ -1,14 +1,14 @@
 // Chào! — веб-версия. Диалог (живой перевод, запись, текст), фото, история, настройки.
 
-import { store } from './store.js?v=202608261444';
-import { gemini, LiveSession } from './gemini.js?v=202608261444';
-import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608261444';
-import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608261444';
-import { iconSVG, renderIcons } from './icons.js?v=202608261444';
-import { PHRASES } from './phrases.js?v=202608261444';
+import { store } from './store.js?v=202608261450';
+import { gemini, LiveSession } from './gemini.js?v=202608261450';
+import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608261450';
+import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608261450';
+import { iconSVG, renderIcons } from './icons.js?v=202608261450';
+import { PHRASES } from './phrases.js?v=202608261450';
 
 const $ = (id) => document.getElementById(id);
-const VERSION = '202608261444';
+const VERSION = '202608261450';
 
 const mic = new Microphone();
 const player = new Player(onModelSpeaking);
@@ -92,8 +92,9 @@ function boot() {
     toast('Ключ сохранён');
   });
   $('setCheck').addEventListener('click', checkKey);
-  $('wipeBtn').addEventListener('click', () => {
-    if (!confirm('Удалить ключ и всю историю с этого устройства?')) return;
+  $('wipeBtn').addEventListener('click', async () => {
+    const ok = await askConfirm('Удалить всё?', 'С этого устройства пропадут ключ, история разговоров и сохранённые фото. Отменить будет нельзя.');
+    if (!ok) return;
     store.wipe();
     messages = [];
     location.reload();
@@ -133,6 +134,22 @@ async function checkForUpdate(manual) {
   } catch (e) {
     if (manual) toast('Не удалось проверить обновления');
   }
+}
+
+/** Подтверждение в стиле приложения вместо системного окна. */
+function askConfirm(title, text) {
+  return new Promise((resolve) => {
+    $('confirmTitle').textContent = title;
+    $('confirmText').textContent = text;
+    $('confirmBox').classList.remove('hidden');
+    const close = (result) => {
+      $('confirmBox').classList.add('hidden');
+      $('confirmYes').onclick = $('confirmNo').onclick = null;
+      resolve(result);
+    };
+    $('confirmYes').onclick = () => { haptic(16); close(true); };
+    $('confirmNo').onclick = () => close(false);
+  });
 }
 
 function updateNetworkState() {
@@ -209,7 +226,21 @@ function renderFeed() {
     feed.innerHTML = `<div class="empty">
       <div class="empty-icon">${iconSVG('chat', 52)}</div><h3>Chào!</h3>
       <p>Скажите фразу по-русски — озвучу её по-вьетнамски. Собеседник ответит в микрофон — вы прочтёте по-русски.</p>
-      <div class="chip">Волна — живой перевод без пауз</div></div>`;
+      <div class="chip">Волна — живой перевод без пауз</div>
+      <div class="quick" id="quickPhrases"></div></div>`;
+    const quick = [
+      ['Здравствуйте', 'Xin chào'],
+      ['Сколько стоит?', 'Bao nhiêu tiền?'],
+      ['Спасибо', 'Cảm ơn'],
+      ['Где туалет?', 'Nhà vệ sinh ở đâu?'],
+    ];
+    const box = $('quickPhrases');
+    for (const [ru, vi] of quick) {
+      const b = document.createElement('button');
+      b.textContent = ru;
+      b.addEventListener('click', () => usePhrase(ru, vi));
+      box.appendChild(b);
+    }
     return;
   }
   feed.innerHTML = '';
@@ -406,7 +437,9 @@ async function sendText() {
 
 async function translateAndAdd(fn) {
   busy = true;
-  setStatus('перевожу…', 'busy', null);
+  showTyping(true);
+  // Если ответ подзатянулся — честно говорим об этом, чтобы не казалось, что зависло
+  const slowTimer = setTimeout(() => setStatus('модель думает дольше обычного…', 'busy', null), 6000);
   try {
     const r = await fn();
     addMessage({ id: crypto.randomUUID(), ts: Date.now(), sourceLanguage: r.sourceLanguage, transcript: r.transcript, translation: r.translation });
@@ -417,8 +450,24 @@ async function translateAndAdd(fn) {
     toast(e.message);
     log(`перевод не удался: ${e.message}`);
   } finally {
+    clearTimeout(slowTimer);
+    showTyping(false);
     busy = false;
   }
+}
+
+/** Пузырь с точками в ленте, пока идёт перевод. */
+function showTyping(on) {
+  const feed = $('feed');
+  const existing = $('typingBubble');
+  if (!on) { existing?.remove(); return; }
+  if (existing) return;
+  const el = document.createElement('div');
+  el.className = 'typing';
+  el.id = 'typingBubble';
+  el.innerHTML = '<i></i><i></i><i></i>';
+  feed.appendChild(el);
+  feed.scrollTop = feed.scrollHeight;
 }
 
 function newSession() {
@@ -654,7 +703,10 @@ function swipeRow(innerHTML, onDelete, onOpen) {
     if (open) { open = false; card.style.transition = 'transform .22s'; setX(0); return; }
     onOpen();
   });
-  del.addEventListener('click', (e) => { e.stopPropagation(); haptic(16); onDelete(); });
+  del.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (await askConfirm('Удалить запись?', 'Её нельзя будет вернуть.')) onDelete();
+  });
   return wrap;
 }
 
