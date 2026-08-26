@@ -1,13 +1,13 @@
 // Chào! — веб-версия. Диалог (живой перевод, запись, текст), фото, история, настройки.
 
-import { store } from './store.js?v=202608261415';
-import { gemini, LiveSession } from './gemini.js?v=202608261415';
-import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608261415';
-import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608261415';
-import { iconSVG, renderIcons } from './icons.js?v=202608261415';
+import { store } from './store.js?v=202608261420';
+import { gemini, LiveSession } from './gemini.js?v=202608261420';
+import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608261420';
+import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608261420';
+import { iconSVG, renderIcons } from './icons.js?v=202608261420';
 
 const $ = (id) => document.getElementById(id);
-const VERSION = '202608261415';
+const VERSION = '202608261420';
 
 const mic = new Microphone();
 const player = new Player(onModelSpeaking);
@@ -93,12 +93,37 @@ function boot() {
   // фоновый режим: iOS всё равно отрежет микрофон — выключаем живой режим честно
   document.addEventListener('visibilitychange', () => {
     if (document.hidden && liveOn) { stopLive(); toast('Живой перевод выключен: приложение свернули'); }
+    if (!document.hidden) checkForUpdate();
   });
 
+  $('updateBtn').addEventListener('click', () => checkForUpdate(true));
+
   renderIcons();
+  checkForUpdate();
   renderFeed();
   updateStorageInfo();
   if ('speechSynthesis' in window) speechSynthesis.getVoices();
+}
+
+/** Сверяет свою версию с серверной: iOS-кэш обновляет файлы вразнобой,
+ *  поэтому при расхождении перезагружаемся принудительно со свежим адресом. */
+async function checkForUpdate(manual) {
+  try {
+    const res = await fetch(`version.json?t=${Date.now()}`, { cache: 'no-store' });
+    const { version } = await res.json();
+    if (!version || version === 'dev') return;
+    if (version === VERSION) {
+      if (manual) toast('У вас последняя версия');
+      return;
+    }
+    log(`обновление: ${VERSION} → ${version}`);
+    if (manual) toast('Обновляю…');
+    // Сбрасываем всё, что мог закэшировать браузер, и грузим свежий index.html
+    if (window.caches) { for (const k of await caches.keys()) await caches.delete(k); }
+    setTimeout(() => location.replace(`index.html?v=${version}`), manual ? 400 : 900);
+  } catch (e) {
+    if (manual) toast('Не удалось проверить обновления');
+  }
 }
 
 function showOnboarding() { $('onboarding').classList.remove('hidden'); $('app').classList.add('hidden'); }

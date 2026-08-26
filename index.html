@@ -10,7 +10,7 @@
 <meta name="theme-color" content="#F0532E">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon.png">
-<link rel="stylesheet" href="css/style.css?v=202608261415">
+<link rel="stylesheet" href="css/style.css?v=202608261420">
 <title>Chào! — переводчик</title>
 </head>
 <body>
@@ -107,7 +107,11 @@
         <button class="btn ghost small danger" id="wipeBtn">Удалить всё (ключ и историю)</button>
       </div>
       <details class="card"><summary>Журнал диагностики</summary><div id="log"></div></details>
-      <p class="fine center">Chào! — веб-версия · <span id="version"></span></p>
+      <div class="card">
+        <h4>Версия</h4>
+        <p class="fine">Chào! — веб-версия · <span id="version"></span></p>
+        <button class="btn ghost small" id="updateBtn">Проверить обновления</button>
+      </div>
     </div>
   </section>
 
@@ -143,6 +147,6 @@
 
 <div id="toast" class="toast hidden"></div>
 
-<script type="module" src="js/app.js?v=202608261415"></script>
+<script type="module" src="js/app.js?v=202608261420"></script>
 </body>
 </html>

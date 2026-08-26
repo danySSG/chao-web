@@ -18,4 +18,7 @@ done
 # версия в настройках
 sed -i '' -E "s|const VERSION = '[^']*';|const VERSION = '$V';|" js/app.js
 
+# отдельный файл версии: приложение опрашивает его и обновляется само
+printf '{"version":"%s"}\n' "$V" > version.json
+
 echo "версия сборки: $V"
