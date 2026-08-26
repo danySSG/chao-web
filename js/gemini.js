@@ -1,8 +1,8 @@
 // Клиент Gemini: REST-цепочка с фолбэками + Live API по WebSocket.
 // Логика перенесена из нативной версии (Swift), протокол проверен в поле.
 
-import { store } from './store.js?v=202608261433';
-import { log } from './util.js?v=202608261433';
+import { store } from './store.js?v=202608261444';
+import { log } from './util.js?v=202608261444';
 
 const REST_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 const WS_URL = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
@@ -134,15 +134,24 @@ async function callModel(model, { system, parts, schema }) {
   if (isGemma) generationConfig.responseJsonSchema = toStandardSchema(schema);
   else generationConfig.responseSchema = schema;
 
-  const res = await fetch(`${REST_BASE}/${model}:generateContent`, {
+  if (!navigator.onLine) {
+    throw new GeminiError('Нет интернета. Откройте «Готовые фразы» — они работают без сети.', 'offline');
+  }
+
+  let res;
+  try {
+    res = await fetch(`${REST_BASE}/${model}:generateContent`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: system }] },
-      contents: [{ role: 'user', parts }],
-      generationConfig,
-    }),
-  });
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: system }] },
+        contents: [{ role: 'user', parts }],
+        generationConfig,
+      }),
+    });
+  } catch {
+    throw new GeminiError('Не удалось связаться с Gemini. Проверьте интернет.', 'offline');
+  }
 
   if (!res.ok) {
     let msg = '';
@@ -180,6 +189,7 @@ async function generate(opts) {
       log(`${model}: ответ за ${Math.round(performance.now() - t0)} мс`);
       return result;
     } catch (e) {
+      if (e.kind === 'offline' || e.kind === 'nokey') throw e;
       const m = (e.raw || e.message || '').toLowerCase();
       const retriable =
         e.kind === 'quota' ||
@@ -207,7 +217,15 @@ export const gemini = {
     throw new GeminiError(friendly(res.status, msg), 'api');
   },
 
-  translateText(text, context) {
+  async translateText(text, context) {
+    const cached = store.getCachedTranslation(text);
+    if (cached) { log('перевод из кэша (запрос не потрачен)'); return cached; }
+    const result = await this._translateText(text, context);
+    store.cacheTranslation(text, result);
+    return result;
+  },
+
+  _translateText(text, context) {
     const parts = [];
     if (context) parts.push({ text: `Контекст предыдущих реплик (только для точности перевода):\n${context}` });
     parts.push({ text: `Переведи эту реплику:\n${text}` });

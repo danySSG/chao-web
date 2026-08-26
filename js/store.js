@@ -6,10 +6,12 @@ const K_KEY = 'chao.key';
 const K_CURRENT = 'chao.current';
 const K_SESSIONS = 'chao.sessions';
 const K_PHOTOS = 'chao.photos';
+const K_TRCACHE = 'chao.trcache';
 
 const MAX_CURRENT = 300;
 const MAX_SESSIONS = 60;
 const MAX_PHOTOS = 30;
+const MAX_CACHED_TRANSLATIONS = 150;
 
 function read(key, fallback) {
   try { return JSON.parse(localStorage.getItem(key)) ?? fallback; }
@@ -70,15 +72,30 @@ export const store = {
     write(K_PHOTOS, this.getPhotos().filter(p => p.id !== id));
   },
 
+  // --- кэш переводов: повторную фразу не переводим заново
+  getCachedTranslation(text) {
+    const key = text.trim().toLowerCase();
+    return read(K_TRCACHE, {})[key] || null;
+  },
+  cacheTranslation(text, result) {
+    const cache = read(K_TRCACHE, {});
+    cache[text.trim().toLowerCase()] = result;
+    const keys = Object.keys(cache);
+    if (keys.length > MAX_CACHED_TRANSLATIONS) {
+      for (const k of keys.slice(0, keys.length - MAX_CACHED_TRANSLATIONS)) delete cache[k];
+    }
+    write(K_TRCACHE, cache);
+  },
+
   // --- обслуживание
   usageKB() {
     let total = 0;
-    for (const k of [K_CURRENT, K_SESSIONS, K_PHOTOS]) {
+    for (const k of [K_CURRENT, K_SESSIONS, K_PHOTOS, K_TRCACHE]) {
       total += (localStorage.getItem(k) || '').length;
     }
     return Math.round(total / 1024);
   },
   wipe() {
-    [K_KEY, K_CURRENT, K_SESSIONS, K_PHOTOS].forEach(k => localStorage.removeItem(k));
+    [K_KEY, K_CURRENT, K_SESSIONS, K_PHOTOS, K_TRCACHE].forEach(k => localStorage.removeItem(k));
   },
 };

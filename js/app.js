@@ -1,13 +1,14 @@
 // Chào! — веб-версия. Диалог (живой перевод, запись, текст), фото, история, настройки.
 
-import { store } from './store.js?v=202608261433';
-import { gemini, LiveSession } from './gemini.js?v=202608261433';
-import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608261433';
-import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608261433';
-import { iconSVG, renderIcons } from './icons.js?v=202608261433';
+import { store } from './store.js?v=202608261444';
+import { gemini, LiveSession } from './gemini.js?v=202608261444';
+import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608261444';
+import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608261444';
+import { iconSVG, renderIcons } from './icons.js?v=202608261444';
+import { PHRASES } from './phrases.js?v=202608261444';
 
 const $ = (id) => document.getElementById(id);
-const VERSION = '202608261433';
+const VERSION = '202608261444';
 
 const mic = new Microphone();
 const player = new Player(onModelSpeaking);
@@ -58,6 +59,13 @@ function boot() {
   $('statusAction').addEventListener('click', () => { if (liveOn) stopLive(); else if (recording) cancelRecording(); });
   $('newBtn').addEventListener('click', newSession);
   $('histBtn').addEventListener('click', () => openHistory('dialogs'));
+  $('phrasesBtn').addEventListener('click', openPhrases);
+  $('phrasesClose').addEventListener('click', () => $('phrases').classList.add('hidden'));
+
+  addEventListener('online', updateNetworkState);
+  addEventListener('offline', updateNetworkState);
+  updateNetworkState();
+  registerServiceWorker();
 
   // фото
   $('cameraBtn').addEventListener('click', () => $('fileCamera').click());
@@ -125,6 +133,57 @@ async function checkForUpdate(manual) {
   } catch (e) {
     if (manual) toast('Не удалось проверить обновления');
   }
+}
+
+function updateNetworkState() {
+  const off = !navigator.onLine;
+  $('offlineBar').classList.toggle('hidden', !off);
+  if (off) log('сеть пропала — доступен разговорник');
+}
+
+/** Оболочка приложения кладётся в кэш, чтобы оно открывалось без интернета. */
+async function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  try {
+    await navigator.serviceWorker.register('sw.js');
+    log('офлайн-режим готов');
+  } catch (e) {
+    log('service worker не зарегистрирован: ' + e.message);
+  }
+}
+
+// ------------------------------------------------------------------ разговорник
+
+function openPhrases() {
+  const box = $('phrasesContent');
+  box.innerHTML = '';
+  for (const group of PHRASES) {
+    const title = document.createElement('div');
+    title.className = 'section-title';
+    title.textContent = group.title.toUpperCase();
+    box.appendChild(title);
+    for (const [ru, vi] of group.items) {
+      const el = document.createElement('button');
+      el.className = 'phrase';
+      el.innerHTML = `<span class="ph-ru"></span><span class="ph-vi"></span><span class="ph-speak" data-icon="speaker" data-icon-size="18"></span>`;
+      el.querySelector('.ph-ru').textContent = ru;
+      el.querySelector('.ph-vi').textContent = vi;
+      el.addEventListener('click', () => usePhrase(ru, vi));
+      box.appendChild(el);
+    }
+  }
+  renderIcons(box);
+  $('phrases').classList.remove('hidden');
+}
+
+/** Фраза из разговорника: озвучиваем, кладём в ленту и открываем крупно. */
+function usePhrase(ru, vi) {
+  haptic(12);
+  speaker.speak(vi, 'vi-VN');
+  const message = { id: crypto.randomUUID(), ts: Date.now(), sourceLanguage: 'ru', transcript: ru, translation: vi };
+  addMessage(message);
+  $('phrases').classList.add('hidden');
+  openBig(message);
 }
 
 function showOnboarding() { $('onboarding').classList.remove('hidden'); $('app').classList.add('hidden'); }

@@ -18,6 +18,9 @@ done
 # версия в настройках
 sed -i '' -E "s|const VERSION = '[^']*';|const VERSION = '$V';|" js/app.js
 
+# версия в service worker — новая версия = новый кэш
+sed -i '' -E "s|const VERSION = '[^']*';|const VERSION = '$V';|" sw.js
+
 # отдельный файл версии: приложение опрашивает его и обновляется само
 printf '{"version":"%s"}\n' "$V" > version.json
 

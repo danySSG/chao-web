@@ -10,7 +10,7 @@
 <meta name="theme-color" content="#F0532E">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon.png">
-<link rel="stylesheet" href="css/style.css?v=202608261433">
+<link rel="stylesheet" href="css/style.css?v=202608261444">
 <title>Chào! — переводчик</title>
 </head>
 <body>
@@ -40,8 +40,10 @@
     <header class="bar">
       <button class="icon-btn" id="histBtn" title="История"><span data-icon="history" data-icon-size="21"></span></button>
       <h2>Диалог</h2>
+      <button class="icon-btn" id="phrasesBtn" title="Готовые фразы"><span data-icon="book" data-icon-size="20"></span></button>
       <button class="icon-btn" id="newBtn" title="Новый разговор"><span data-icon="edit" data-icon-size="20"></span></button>
     </header>
+    <div class="offline-bar hidden" id="offlineBar"><span data-icon="offline" data-icon-size="16"></span>Нет сети — работает разговорник</div>
     <div class="banner" id="speakBanner">Hãy nói! • Говорите!<small>Tôi sẽ dịch ngay • Я сразу переведу</small></div>
     <div class="content" id="feed">
       <div class="empty" id="feedEmpty">
@@ -148,8 +150,18 @@
   <div class="content" id="histContent"></div>
 </div>
 
+<!-- РАЗГОВОРНИК -->
+<div class="overlay sheet hidden" id="phrases">
+  <header class="bar">
+    <h2>Готовые фразы</h2>
+    <button class="icon-btn" id="phrasesClose"><span data-icon="close" data-icon-size="18"></span></button>
+  </header>
+  <p class="fine center" style="margin:8px 16px 0">Работают без интернета. Тап — озвучить и показать собеседнику.</p>
+  <div class="content" id="phrasesContent"></div>
+</div>
+
 <div id="toast" class="toast hidden"></div>
 
-<script type="module" src="js/app.js?v=202608261433"></script>
+<script type="module" src="js/app.js?v=202608261444"></script>
 </body>
 </html>
