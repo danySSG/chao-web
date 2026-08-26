@@ -165,13 +165,19 @@ input:focus { outline: none; border-color: var(--accent); }
 @keyframes pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.06); } }
 
 /* Таббар */
+/* Плавающая капсула по центру — как таббар в iOS 26, а не растянутая полоса */
 .tabbar {
-  display: flex; border-top: 1px solid var(--card); background: var(--bg);
-  padding-bottom: env(safe-area-inset-bottom);
+  display: flex; justify-content: center; gap: 2px;
+  background: var(--bg);
+  padding: 6px 12px calc(6px + env(safe-area-inset-bottom));
 }
-.tab { flex: 1; padding: 8px 0 6px; font-size: 11px; color: var(--muted); display: grid; gap: 2px; justify-items: center; }
-.tab span { font-size: 21px; }
-.tab.active { color: var(--accent); }
+.tab {
+  flex: none; padding: 7px 20px 6px; border-radius: 18px;
+  font-size: 11px; color: var(--muted);
+  display: grid; gap: 2px; justify-items: center;
+}
+.tab [data-icon] { height: 23px; }
+.tab.active { color: var(--accent); background: var(--accent-soft); }
 
 /* Фото */
 .pickers { display: flex; gap: 10px; margin-bottom: 14px; }

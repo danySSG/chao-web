@@ -1,13 +1,13 @@
 // Chào! — веб-версия. Диалог (живой перевод, запись, текст), фото, история, настройки.
 
-import { store } from './store.js?v=202608261407';
-import { gemini, LiveSession } from './gemini.js?v=202608261407';
-import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608261407';
-import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608261407';
-import { iconSVG, renderIcons } from './icons.js?v=202608261407';
+import { store } from './store.js?v=202608261415';
+import { gemini, LiveSession } from './gemini.js?v=202608261415';
+import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608261415';
+import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608261415';
+import { iconSVG, renderIcons } from './icons.js?v=202608261415';
 
 const $ = (id) => document.getElementById(id);
-const VERSION = '202608261407';
+const VERSION = '202608261415';
 
 const mic = new Microphone();
 const player = new Player(onModelSpeaking);
