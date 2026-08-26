@@ -1,14 +1,18 @@
 // Chào! — веб-версия. Диалог (живой перевод, запись, текст), фото, история, настройки.
 
-import { store } from './store.js?v=202608261450';
-import { gemini, LiveSession } from './gemini.js?v=202608261450';
-import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608261450';
-import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608261450';
-import { iconSVG, renderIcons } from './icons.js?v=202608261450';
-import { PHRASES } from './phrases.js?v=202608261450';
+import { store } from './store.js?v=202608261505';
+import { gemini, LiveSession } from './gemini.js?v=202608261505';
+import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608261505';
+import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608261505';
+import { iconSVG, renderIcons } from './icons.js?v=202608261505';
+import { PHRASES } from './phrases.js?v=202608261505';
+import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202608261505';
 
 const $ = (id) => document.getElementById(id);
-const VERSION = '202608261450';
+const VERSION = '202608261505';
+
+let deferredInstall = null;
+addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredInstall = e; });
 
 const mic = new Microphone();
 const player = new Player(onModelSpeaking);
@@ -30,10 +34,9 @@ function boot() {
 
   if (store.hasKey()) showApp(); else showOnboarding();
 
-  // онбординг
-  $('obKey').addEventListener('input', (e) => {
-    $('obSave').disabled = e.target.value.trim().length < 20;
-  });
+  // онбординг — пошаговый мастер
+  initOnboarding();
+
   $('obSave').addEventListener('click', () => {
     store.setKey($('obKey').value);
     showApp();
@@ -107,6 +110,7 @@ function boot() {
   });
 
   $('updateBtn').addEventListener('click', () => checkForUpdate(true));
+  $('installHelpBtn')?.addEventListener('click', () => { $('app').classList.add('hidden'); showInstallGuide(); });
 
   renderIcons();
   checkForUpdate();
@@ -203,8 +207,136 @@ function usePhrase(ru, vi) {
   openBig(message);
 }
 
-function showOnboarding() { $('onboarding').classList.remove('hidden'); $('app').classList.add('hidden'); }
-function showApp() { $('onboarding').classList.add('hidden'); $('app').classList.remove('hidden'); }
+let obStep = 0;
+const OB_LAST = 3;
+
+function initOnboarding() {
+  $('obIllust1').innerHTML = featuresIllustration();
+  $('obIllust2').innerHTML = studioIllustration();
+
+  const dots = $('obSteps');
+  dots.innerHTML = '';
+  for (let i = 0; i <= OB_LAST; i++) {
+    const d = document.createElement('span');
+    d.className = 'ob-dot' + (i === 0 ? ' on' : '');
+    dots.appendChild(d);
+  }
+
+  $('obNext').addEventListener('click', obNext);
+  $('obBack').addEventListener('click', () => goStep(obStep - 1));
+  $('obPaste').addEventListener('click', pasteKey);
+  for (const ev of ['input', 'change', 'paste']) {
+    $('obKey').addEventListener(ev, () => setTimeout(updateObNav, 0));
+  }
+  $('installSkip').addEventListener('click', () => { $('install').classList.add('hidden'); showApp(); });
+  updateObNav();
+}
+
+function goStep(n) {
+  obStep = Math.max(0, Math.min(OB_LAST, n));
+  document.querySelectorAll('.ob-step').forEach(el => {
+    el.classList.toggle('hidden', Number(el.dataset.step) !== obStep);
+  });
+  document.querySelectorAll('.ob-dot').forEach((d, i) => d.classList.toggle('on', i === obStep));
+  $('obInnerScroll')?.scrollTo(0, 0);
+  $('onboarding').scrollTo({ top: 0, behavior: 'smooth' });
+  updateObNav();
+}
+
+function updateObNav() {
+  $('obBack').classList.toggle('hidden', obStep === 0);
+  const isLast = obStep === OB_LAST;
+  const keyOk = $('obKey').value.trim().length >= 20;
+  $('obNext').textContent = isLast ? 'Готово' : 'Далее';
+  $('obNext').disabled = isLast && !keyOk;
+}
+
+async function pasteKey() {
+  try {
+    const text = await navigator.clipboard.readText();
+    if (!text.trim()) { toast('В буфере пусто — сначала скопируйте ключ'); return; }
+    $('obKey').value = text.trim();
+    updateObNav();
+    haptic(12);
+  } catch {
+    toast('Не получилось — нажмите на поле и выберите «Вставить»');
+  }
+}
+
+function obNext() {
+  if (obStep < OB_LAST) { goStep(obStep + 1); return; }
+  const key = $('obKey').value.trim();
+  if (key.length < 20) return;
+  store.setKey(key);
+  $('onboarding').classList.add('hidden');
+  if (isInstalled()) { showApp(); toast('Готово! Можно говорить'); }
+  else showInstallGuide();
+}
+
+function isInstalled() {
+  return matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+}
+
+/** Инструкция по установке — своя для каждой платформы. */
+function showInstallGuide() {
+  const ua = navigator.userAgent;
+  const isIOS = /iPhone|iPad|iPod/.test(ua);
+  const isSafari = isIOS && !/CriOS|FxiOS|EdgiOS|OPiOS/.test(ua);
+  const isAndroid = /Android/.test(ua);
+  const steps = $('installSteps');
+  steps.innerHTML = '';
+
+  const put = (html) => { const li = document.createElement('li'); li.innerHTML = html; steps.appendChild(li); };
+
+  if (isIOS && isSafari) {
+    $('installIllust').innerHTML = shareIllustration() + addHomeIllustration();
+    put('Нажмите кнопку <b>«Поделиться»</b> внизу экрана — квадрат со стрелкой вверх.');
+    put('Пролистайте список вниз до пункта <b>«На экран „Домой“»</b> и нажмите его.');
+    put('Нажмите <b>«Добавить»</b> справа вверху.');
+    put('Закройте браузер и запускайте Chào! с домашнего экрана — по значку с флагом.');
+  } else if (isIOS) {
+    $('installLead').textContent = 'Чтобы значок появился на домашнем экране, эту страницу нужно открыть в Safari — другие браузеры на iPhone так не умеют.';
+    $('installIllust').innerHTML = shareIllustration();
+    put('Скопируйте ссылку этой страницы (кнопка ниже).');
+    put('Откройте <b>Safari</b> — стандартный браузер с синим компасом.');
+    put('Вставьте ссылку в адресную строку и откройте.');
+    put('Нажмите <b>«Поделиться»</b> → <b>«На экран „Домой“»</b>.');
+    const copy = document.createElement('button');
+    copy.className = 'btn ghost';
+    copy.textContent = 'Скопировать ссылку';
+    copy.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(location.href); toast('Ссылка скопирована'); }
+      catch { toast(location.href); }
+    });
+    steps.after(copy);
+  } else if (isAndroid) {
+    $('installIllust').innerHTML = androidInstallIllustration();
+    if (deferredInstall) {
+      $('installNow').classList.remove('hidden');
+      $('installNow').onclick = async () => {
+        deferredInstall.prompt();
+        await deferredInstall.userChoice;
+        deferredInstall = null;
+        $('install').classList.add('hidden');
+        showApp();
+      };
+      put('Нажмите кнопку <b>«Установить приложение»</b> ниже и подтвердите.');
+    } else {
+      put('Нажмите на <b>три точки</b> справа вверху браузера.');
+      put('Выберите <b>«Установить приложение»</b> (или «Добавить на главный экран»).');
+      put('Подтвердите — значок появится на рабочем столе.');
+    }
+  } else {
+    $('installLead').textContent = 'Приложение уже работает. На телефоне его можно добавить на домашний экран и открывать как обычное приложение.';
+    put('В браузере на телефоне откройте эту же ссылку.');
+    put('iPhone: «Поделиться» → «На экран „Домой“».');
+    put('Android: меню браузера → «Установить приложение».');
+  }
+  $('install').classList.remove('hidden');
+}
+
+function showOnboarding() { $('onboarding').classList.remove('hidden'); $('app').classList.add('hidden'); goStep(0); }
+function showApp() { $('onboarding').classList.add('hidden'); $('install').classList.add('hidden'); $('app').classList.remove('hidden'); }
 
 function switchTab(name) {
   document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === name));

@@ -10,25 +10,80 @@
 <meta name="theme-color" content="#F0532E">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon.png">
-<link rel="stylesheet" href="css/style.css?v=202608261450">
+<link rel="stylesheet" href="css/style.css?v=202608261505">
 <title>Chào! — переводчик</title>
 </head>
 <body>
 
-<!-- ОНБОРДИНГ -->
+<!-- ОНБОРДИНГ: пошаговый мастер -->
 <section id="onboarding" class="screen onboarding hidden">
   <div class="ob-inner">
-    <h1 class="logo">Chào! 🇻🇳</h1>
-    <p class="lead">Переводчик для жизни во Вьетнаме:<br>голосовой диалог и перевод по фото.</p>
-    <ol class="steps">
-      <li><span>1</span><p>Откройте Google AI Studio (кнопка ниже) и войдите аккаунтом Google.</p></li>
-      <li><span>2</span><p>Нажмите «Create API key». Если попросит проект — создайте новый, имя любое. Это бесплатно.</p></li>
-      <li><span>3</span><p>Скопируйте созданный ключ целиком и вставьте сюда.</p></li>
-    </ol>
-    <a class="btn ghost" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Открыть Google AI Studio<span data-icon="external" data-icon-size="17"></span></a>
-    <input type="password" id="obKey" placeholder="Вставьте ключ сюда" autocomplete="off" autocapitalize="off" spellcheck="false">
-    <button class="btn primary" id="obSave" disabled>Начать</button>
-    <p class="fine">Ключ хранится только на этом устройстве и отправляется только в Google.</p>
+    <div class="ob-steps" id="obSteps"></div>
+
+    <!-- Шаг 1: что это -->
+    <div class="ob-step" data-step="0">
+      <h1 class="logo">Chào!</h1>
+      <p class="lead">Переводчик для жизни во Вьетнаме.<br>Понимает речь и читает надписи.</p>
+      <div class="illust-box" id="obIllust1"></div>
+      <ul class="ob-list">
+        <li>Говорите по-русски — телефон скажет по-вьетнамски</li>
+        <li>Сфотографируйте меню — переведёт каждое блюдо</li>
+        <li>Полсотни готовых фраз работают без интернета</li>
+      </ul>
+    </div>
+
+    <!-- Шаг 2: зачем ключ -->
+    <div class="ob-step hidden" data-step="1">
+      <h2 class="ob-title">Нужен бесплатный ключ Google</h2>
+      <p class="lead">Приложение переводит через Gemini — сервис Google. Чтобы он работал у вас, нужен личный ключ доступа.</p>
+      <div class="ob-facts">
+        <div><b>Бесплатно</b><span>без карты и подписки</span></div>
+        <div><b>2 минуты</b><span>нужен аккаунт Google</span></div>
+        <div><b>Только ваш</b><span>хранится на телефоне</span></div>
+      </div>
+      <p class="fine center">Аккаунт Google — это почта на @gmail.com. Она есть почти у всех.</p>
+    </div>
+
+    <!-- Шаг 3: получить ключ -->
+    <div class="ob-step hidden" data-step="2">
+      <h2 class="ob-title">Получите ключ</h2>
+      <div class="illust-box" id="obIllust2"></div>
+      <ol class="ob-numbered">
+        <li>Нажмите кнопку ниже — откроется сайт Google.</li>
+        <li>Войдите со своим аккаунтом Google, если попросит.</li>
+        <li>Нажмите синюю кнопку <b>«Create API key»</b>.</li>
+        <li>Если спросит про проект — нажмите <b>«Create project»</b>, название любое.</li>
+        <li>Появится длинная строка — это ключ. Нажмите на значок копирования рядом с ней.</li>
+        <li>Вернитесь сюда (стрелка «назад» слева вверху или переключение приложений).</li>
+      </ol>
+      <a class="btn primary" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Открыть сайт Google<span data-icon="external" data-icon-size="17"></span></a>
+    </div>
+
+    <!-- Шаг 4: вставить ключ -->
+    <div class="ob-step hidden" data-step="3">
+      <h2 class="ob-title">Вставьте ключ</h2>
+      <p class="lead">Нажмите на поле и выберите «Вставить». Ключ — это длинная строка из букв и цифр.</p>
+      <input type="password" id="obKey" placeholder="Нажмите сюда и вставьте" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <button class="btn ghost" id="obPaste">Вставить из буфера</button>
+      <p class="fine center" id="obKeyHint">Ключ сохранится только на этом устройстве.</p>
+    </div>
+
+    <div class="ob-nav">
+      <button class="btn ghost" id="obBack">Назад</button>
+      <button class="btn primary" id="obNext">Далее</button>
+    </div>
+  </div>
+</section>
+
+<!-- УСТАНОВКА НА ДОМАШНИЙ ЭКРАН -->
+<section id="install" class="screen onboarding hidden">
+  <div class="ob-inner">
+    <h2 class="ob-title">Последний шаг</h2>
+    <p class="lead" id="installLead">Добавьте Chào! на домашний экран — будет открываться как обычное приложение, во весь экран.</p>
+    <div class="illust-box" id="installIllust"></div>
+    <ol class="ob-numbered" id="installSteps"></ol>
+    <button class="btn primary hidden" id="installNow">Установить приложение</button>
+    <button class="btn ghost" id="installSkip">Пропустить — пользоваться так</button>
   </div>
 </section>
 
@@ -101,7 +156,8 @@
       </div>
       <div class="card">
         <h4>Установить как приложение</h4>
-        <p class="fine">iPhone: «Поделиться» → «На экран "Домой"».<br>Android: меню браузера → «Установить приложение».</p>
+        <p class="fine">Открывается во весь экран, как обычное приложение.</p>
+        <button class="btn ghost small" id="installHelpBtn">Показать инструкцию</button>
       </div>
       <div class="card">
         <h4>Данные</h4>
@@ -174,6 +230,6 @@
 
 <div id="toast" class="toast hidden"></div>
 
-<script type="module" src="js/app.js?v=202608261450"></script>
+<script type="module" src="js/app.js?v=202608261505"></script>
 </body>
 </html>

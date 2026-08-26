@@ -399,3 +399,43 @@ a.btn { text-decoration: none; }
 .modal-actions { display: flex; gap: 10px; }
 .modal-actions .btn { padding: 13px; }
 .btn.danger-btn { background: var(--red); }
+
+/* Пошаговый мастер */
+.ob-steps { display: flex; gap: 6px; justify-content: center; margin-bottom: 6px; }
+.ob-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--card-2); transition: all .2s; }
+.ob-dot.on { background: var(--accent); width: 20px; border-radius: 4px; }
+.ob-step { display: grid; gap: 14px; animation: tab-in .22s ease; }
+.ob-title { font-size: 22px; font-weight: 800; text-align: center; margin: 4px 0 0; }
+.illust-box { display: grid; gap: 12px; justify-items: center; }
+.illust { width: 100%; max-width: 300px; height: auto; display: block; }
+.illust-pointer { animation: point-nudge 1.6s ease-in-out infinite; }
+@keyframes point-nudge { 0%, 100% { transform: translate(0, 0); } 50% { transform: translate(-4px, -4px); } }
+@media (prefers-reduced-motion: reduce) { .illust-pointer { animation: none; } }
+
+.ob-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+.ob-list li { position: relative; padding-left: 20px; font-size: 15px; }
+.ob-list li::before {
+  content: '•'; position: absolute; left: 2px; top: -1px;
+  color: var(--accent); font-weight: 800; font-size: 20px; line-height: 1.2;
+}
+
+.ob-numbered { padding-left: 0; margin: 0; display: grid; gap: 12px; counter-reset: step; list-style: none; }
+.ob-numbered li {
+  position: relative; padding-left: 38px; min-height: 26px;
+  font-size: 15px; line-height: 1.45;
+}
+.ob-numbered li::before {
+  counter-increment: step; content: counter(step);
+  position: absolute; left: 0; top: 0;
+  width: 26px; height: 26px; border-radius: 50%; background: var(--accent-soft); color: var(--accent);
+  font-weight: 800; font-size: 14px; display: grid; place-items: center;
+}
+.ob-numbered b { color: var(--accent); }
+
+.ob-facts { display: grid; gap: 10px; }
+.ob-facts > div { background: var(--card); border-radius: 14px; padding: 13px 15px; display: grid; }
+.ob-facts b { font-size: 15px; }
+.ob-facts span { font-size: 13px; color: var(--muted); }
+
+.ob-nav { display: flex; gap: 10px; margin-top: 6px; }
+.ob-nav .btn { flex: 1; }
