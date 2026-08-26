@@ -10,7 +10,7 @@
 <meta name="theme-color" content="#F0532E">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon.png">
-<link rel="stylesheet" href="css/style.css?v=202608261424">
+<link rel="stylesheet" href="css/style.css?v=202608261433">
 <title>Chào! — переводчик</title>
 </head>
 <body>
@@ -125,9 +125,12 @@
 <!-- ПОЛНОЭКРАННЫЙ ПОКАЗ -->
 <div class="overlay hidden" id="bigView">
   <button class="close" id="bigClose"><span data-icon="close" data-icon-size="18"></span></button>
-  <div class="big-inner">
+  <button class="flip" id="bigFlip" title="Развернуть к собеседнику"><span data-icon="flip" data-icon-size="20"></span></button>
+  <div class="big-inner" id="bigInner">
     <p class="big-src" id="bigSrc"></p>
     <p class="big-tr" id="bigTr"></p>
+  </div>
+  <div class="big-actions">
     <button class="btn white" id="bigSpeak"><span data-icon="speaker" data-icon-size="21"></span>Озвучить</button>
   </div>
 </div>
@@ -147,6 +150,6 @@
 
 <div id="toast" class="toast hidden"></div>
 
-<script type="module" src="js/app.js?v=202608261424"></script>
+<script type="module" src="js/app.js?v=202608261433"></script>
 </body>
 </html>

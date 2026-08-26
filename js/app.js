@@ -1,13 +1,13 @@
 // Chào! — веб-версия. Диалог (живой перевод, запись, текст), фото, история, настройки.
 
-import { store } from './store.js?v=202608261424';
-import { gemini, LiveSession } from './gemini.js?v=202608261424';
-import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608261424';
-import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608261424';
-import { iconSVG, renderIcons } from './icons.js?v=202608261424';
+import { store } from './store.js?v=202608261433';
+import { gemini, LiveSession } from './gemini.js?v=202608261433';
+import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608261433';
+import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608261433';
+import { iconSVG, renderIcons } from './icons.js?v=202608261433';
 
 const $ = (id) => document.getElementById(id);
-const VERSION = '202608261424';
+const VERSION = '202608261433';
 
 const mic = new Microphone();
 const player = new Player(onModelSpeaking);
@@ -72,6 +72,7 @@ function boot() {
 
   // полноэкранный показ
   $('bigClose').addEventListener('click', () => $('bigView').classList.add('hidden'));
+  $('bigFlip').addEventListener('click', () => { $('bigInner').classList.toggle('flipped'); haptic(12); });
 
   // настройки
   $('setKey').value = store.getKey();
@@ -170,6 +171,7 @@ function renderFeed() {
 }
 
 function openBig(m) {
+  $('bigInner').classList.remove('flipped');
   $('bigSrc').textContent = m.transcript || '';
   $('bigTr').textContent = m.translation;
   const lang = isMostlyCyrillic(m.translation) ? 'ru-RU' : 'vi-VN';
@@ -376,7 +378,7 @@ async function handlePhoto(file) {
   if (!file) return;
   photo = { dataUrl: null, result: null, order: new Map() };
   $('orderBtn').classList.add('hidden');
-  $('photoResult').innerHTML = `<div class="loading"><div class="spinner"></div>Читаю фото…</div>`;
+  $('photoResult').innerHTML = `<div class="loading"><div class="spinner"></div>Готовлю снимок…</div>`;
 
   try {
     const { dataUrl, base64 } = await compressImage(file);
@@ -418,7 +420,11 @@ function renderPhoto() {
   }
   const r = photo.result;
   if (!r) {
-    box.insertAdjacentHTML('beforeend', `<div class="loading"><div class="spinner"></div>Читаю фото…</div>`);
+    box.insertAdjacentHTML('beforeend', `
+      <div class="reading"><span class="pulse-dot"></span>Читаю текст на фото…</div>
+      <div class="skeleton-card"><span class="sk sk-title"></span><span class="sk sk-line"></span><span class="sk sk-line short"></span></div>
+      <div class="skeleton-card"><span class="sk sk-title"></span><span class="sk sk-line"></span></div>
+      <div class="skeleton-card"><span class="sk sk-title"></span><span class="sk sk-line"></span><span class="sk sk-line short"></span></div>`);
     return;
   }
   box.insertAdjacentHTML('beforeend', renderResultHTML(r, true));
@@ -492,6 +498,7 @@ function showOrder() {
     }
   }
   if (!items.length) return;
+  $('bigInner').classList.remove('flipped');
   $('bigSrc').textContent = 'Cho tôi gọi món:';
   $('bigTr').innerHTML = items.map(i =>
     `<div style="margin-bottom:18px">${i.n} × ${escapeHtml(i.dish.original)}
@@ -516,19 +523,22 @@ function openHistory(seg) {
       box.innerHTML = `<div class="empty"><p>Прошлых разговоров пока нет.<br>Кнопка ✎ в диалоге начинает новый, а текущий уезжает сюда.</p></div>`;
       return;
     }
+    box.insertAdjacentHTML('beforeend', '<div class="hint-swipe">Тап — открыть, свайп влево — удалить</div>');
     for (const s of sessions) {
       const first = s.messages[0];
       const title = first?.transcript || first?.translation || 'Разговор';
-      const el = document.createElement('div');
-      el.className = 'hist-item';
-      el.innerHTML = `<div class="info"><b></b><small>${fmtDate(s.startedAt)} · ${plural(s.messages.length, 'реплика', 'реплики', 'реплик')}</small></div>
-                      <button class="del" aria-label="удалить">${iconSVG('trash', 19)}</button>`;
+      const preview = s.messages.slice(0, 2).map(m => m.translation).join(' · ');
+      const el = swipeRow(
+        `<div class="info"><b></b><small>${fmtDate(s.startedAt)} · ${plural(s.messages.length, 'реплика', 'реплики', 'реплик')}</small>
+         <span class="preview"></span></div>`,
+        () => { store.removeSession(s.id); openHistory('dialogs'); },
+        () => {
+          const restored = store.resumeSession(s.id);
+          if (restored) { messages = restored; renderFeed(); $('history').classList.add('hidden'); switchTab('dialog'); toast('Разговор продолжен'); }
+        }
+      );
       el.querySelector('b').textContent = title;
-      el.querySelector('.del').addEventListener('click', (e) => { e.stopPropagation(); store.removeSession(s.id); openHistory('dialogs'); });
-      el.addEventListener('click', () => {
-        const restored = store.resumeSession(s.id);
-        if (restored) { messages = restored; renderFeed(); $('history').classList.add('hidden'); switchTab('dialog'); toast('Разговор продолжен'); }
-      });
+      el.querySelector('.preview').textContent = preview;
       box.appendChild(el);
     }
   } else {
@@ -537,20 +547,56 @@ function openHistory(seg) {
       box.innerHTML = `<div class="empty"><p>Сохранённых фото пока нет.<br>Каждый перевод по фото попадает сюда автоматически.</p></div>`;
       return;
     }
+    box.insertAdjacentHTML('beforeend', '<div class="hint-swipe">Тап — открыть, свайп влево — удалить</div>');
     for (const p of photos) {
       const count = p.result.isMenu
         ? plural((p.result.sections || []).reduce((n, s) => n + (s.items?.length || 0), 0), 'блюдо', 'блюда', 'блюд')
         : `документ · ${plural((p.result.blocks || []).length, 'фрагмент', 'фрагмента', 'фрагментов')}`;
-      const el = document.createElement('div');
-      el.className = 'hist-item';
-      el.innerHTML = `<img class="thumb" src="${p.thumb}"><div class="info"><b>${p.result.isMenu ? 'Меню' : 'Документ'}</b><small>${fmtDate(p.ts)} · ${count}</small></div><button class="del" aria-label="удалить">${iconSVG('trash', 19)}</button>`;
-      el.querySelector('.del').addEventListener('click', (e) => { e.stopPropagation(); store.removePhoto(p.id); openHistory('menus'); });
-      el.addEventListener('click', () => {
-        box.innerHTML = `<img class="preview" src="${p.thumb}">` + renderResultHTML(p.result, false);
-      });
+      const el = swipeRow(
+        `<img class="thumb" src="${p.thumb}" alt=""><div class="info"><b>${p.result.isMenu ? 'Меню' : 'Документ'}</b><small>${fmtDate(p.ts)} · ${count}</small></div>`,
+        () => { store.removePhoto(p.id); openHistory('menus'); },
+        () => { box.innerHTML = `<img class="preview" src="${p.thumb}" alt="">` + renderResultHTML(p.result, false); }
+      );
       box.appendChild(el);
     }
   }
+}
+
+/** Строка списка: тап открывает, свайп влево показывает «Удалить». */
+function swipeRow(innerHTML, onDelete, onOpen) {
+  const wrap = document.createElement('div');
+  wrap.className = 'swipe-wrap';
+  wrap.innerHTML = `<button class="swipe-delete">${iconSVG('trash', 20)}<span>Удалить</span></button>
+                    <div class="swipe-card">${innerHTML}</div>`;
+  const card = wrap.querySelector('.swipe-card');
+  const del = wrap.querySelector('.swipe-delete');
+  let startX = 0, dx = 0, open = false, dragging = false;
+
+  const setX = (x) => { card.style.transform = `translateX(${x}px)`; };
+
+  card.addEventListener('touchstart', (e) => {
+    startX = e.touches[0].clientX; dragging = true; card.style.transition = 'none';
+  }, { passive: true });
+
+  card.addEventListener('touchmove', (e) => {
+    if (!dragging) return;
+    dx = e.touches[0].clientX - startX + (open ? -96 : 0);
+    setX(Math.max(-110, Math.min(0, dx)));
+  }, { passive: true });
+
+  card.addEventListener('touchend', () => {
+    dragging = false;
+    card.style.transition = 'transform .22s cubic-bezier(.22,.9,.3,1)';
+    open = dx < -48;
+    setX(open ? -96 : 0);
+  });
+
+  card.addEventListener('click', () => {
+    if (open) { open = false; card.style.transition = 'transform .22s'; setX(0); return; }
+    onOpen();
+  });
+  del.addEventListener('click', (e) => { e.stopPropagation(); haptic(16); onDelete(); });
+  return wrap;
 }
 
 // ------------------------------------------------------------------ настройки
