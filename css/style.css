@@ -46,15 +46,16 @@ button { cursor: pointer; border: 0; background: none; color: inherit; }
 }
 /* На широких экранах приложение — колонка по центру с мягкими границами */
 @media (min-width: 620px) {
-  body { background: var(--page-bg); }
+  /* html красим тоже: margin-top у #app схлопывается наружу body и оголяет фон html */
+  html, body { background: var(--page-bg); }
   #app {
     height: min(100dvh, 900px); margin: max(0px, calc((100dvh - 900px) / 2)) auto;
     border-radius: 26px; overflow: hidden;
     background: var(--bg);
     box-shadow: 0 20px 70px rgba(0,0,0,.28), 0 0 0 1px rgba(128,128,128,.2);
   }
-  .overlay { max-width: 560px; left: 50%; transform: translateX(-50%); }
-  @media (min-height: 940px) { .overlay { max-height: 900px; top: calc((100dvh - 900px) / 2); border-radius: 26px; } }
+  /* Оверлеи центрируются ниже, рядом со своим правилом .overlay — здесь нельзя:
+     inset: 0 из более позднего .overlay затирает отсюда left/top. */
 }
 .screen { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .content { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 14px 16px 20px; }
@@ -234,6 +235,18 @@ input:focus { outline: none; border-color: var(--accent); }
 /* Оверлеи */
 .overlay { position: fixed; inset: 0; z-index: 50; background: var(--bg); display: flex; flex-direction: column; }
 .overlay.sheet { padding-top: env(safe-area-inset-top); }
+/* На широких экранах оверлей повторяет геометрию колонки #app.
+   Правило ОБЯЗАНО стоять после .overlay: специфичность равная, медиа-запрос её не повышает,
+   поэтому inset: 0 из .overlay победил бы left/top, оставив transform — и оверлей уезжал влево. */
+@media (min-width: 620px) {
+  .overlay {
+    left: 50%; right: auto; transform: translateX(-50%);
+    width: 100%; max-width: 560px;
+    top: max(0px, calc((100dvh - 900px) / 2)); bottom: auto;
+    height: min(100dvh, 900px);
+    border-radius: 26px; overflow: hidden;
+  }
+}
 #bigView {
   background: linear-gradient(135deg, var(--accent), var(--accent-2));
   align-items: center; justify-content: center; padding: 24px;
