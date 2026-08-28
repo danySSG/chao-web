@@ -1,8 +1,8 @@
 // Клиент Gemini: REST-цепочка с фолбэками + Live API по WebSocket.
 // Логика перенесена из нативной версии (Swift), протокол проверен в поле.
 
-import { store } from './store.js?v=202608281651';
-import { log } from './util.js?v=202608281651';
+import { store } from './store.js?v=202608281656';
+import { log } from './util.js?v=202608281656';
 
 const REST_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 const WS_URL = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
@@ -20,11 +20,25 @@ const CHAIN = [
 ];
 const LAST_RESORT = 'gemma-4-31b-it'; // только текст и фото, аудио не принимает
 
-// Модель, ответившая 429, помнится и пропускается: дневная квота flash-ярусов
-// (20 запросов) кончается быстро, а каждый заведомо провальный вызов — лишняя
-// секунда ожидания на КАЖДОМ запросе. Через полчаса пробуем снова: вдруг сброс.
+// Модель, ответившая 429, помнится и пропускается: каждый заведомо провальный
+// вызов — лишняя секунда ожидания на КАЖДОМ запросе.
+//
+// Пауза берётся из самого ответа, а не назначается вслепую. У free tier два
+// разных 429: минутный (в живом разговоре реплики идут часто и упираются в него
+// за минуту) и дневной. Ответ различает их полем quotaId и подсказывает
+// retryDelay. Минутный стоит переждать секунды — банить модель на полчаса
+// из-за него нельзя, иначе разговор скатывается по цепочке вниз на ровном месте.
 const QUOTA_KEY = 'chao.quota';
-const QUOTA_PAUSE = 30 * 60 * 1000;
+const QUOTA_PAUSE_DAY = 15 * 60 * 1000;
+const QUOTA_PAUSE_MINUTE = 60 * 1000;
+
+/// Сколько ждать по мнению самого сервера: «Please retry in 28.69s» или RetryInfo.
+function retryPause(message, isDaily) {
+  const m = /retry in ([\d.]+)s/i.exec(message || '');
+  const fromServer = m ? Math.ceil(parseFloat(m[1]) + 1) * 1000 : 0;
+  const floor = isDaily ? QUOTA_PAUSE_DAY : QUOTA_PAUSE_MINUTE;
+  return Math.max(fromServer, floor);
+}
 
 function quotaMap() {
   try { return JSON.parse(localStorage.getItem(QUOTA_KEY)) || {}; } catch { return {}; }
@@ -33,10 +47,10 @@ function isOutOfQuota(model) {
   const until = quotaMap()[model];
   return typeof until === 'number' && Date.now() < until;
 }
-function markOutOfQuota(model) {
+function markOutOfQuota(model, pause) {
   try {
     const map = quotaMap();
-    map[model] = Date.now() + QUOTA_PAUSE;
+    map[model] = Date.now() + pause;
     localStorage.setItem(QUOTA_KEY, JSON.stringify(map));
   } catch {}
 }
@@ -181,7 +195,9 @@ export class GeminiError extends Error {
 
 function friendly(status, message) {
   if (status === 429) {
-    return 'Дневной лимит бесплатных запросов исчерпан. Живой перевод (кнопка-волна) работает без лимита.';
+    return /PerDay|per day/i.test(message || '')
+      ? 'Дневной лимит бесплатных запросов исчерпан. Живой перевод (кнопка-волна) работает без лимита.'
+      : 'Слишком много запросов подряд. Подождите минуту — или говорите через живой перевод, он без лимита.';
   }
   if (status === 401 || status === 403 || /api key/i.test(message)) {
     return 'Ключ не подошёл. Проверьте его в Настройках — если ключ старый, перевыпустите на aistudio.google.com.';
@@ -231,7 +247,12 @@ async function callModel(model, { system, parts, contents, schema, maxTokens = 1
   if (!res.ok) {
     let msg = '';
     try { msg = (await res.json())?.error?.message || ''; } catch {}
-    if (res.status === 429) markOutOfQuota(model);
+    if (res.status === 429) {
+      const isDaily = /PerDay/i.test(msg) || /per day/i.test(msg);
+      const pause = retryPause(msg, isDaily);
+      markOutOfQuota(model, pause);
+      log(`${model}: лимит ${isDaily ? 'на сутки' : 'на минуту'}, пропускаю ${Math.round(pause / 1000)} с`);
+    }
     const err = new GeminiError(friendly(res.status, msg), res.status === 429 ? 'quota' : 'api');
     err.status = res.status;
     err.raw = msg;
@@ -269,7 +290,7 @@ async function generate(opts) {
   let lastErr = null;
 
   for (const model of chain) {
-    if (isOutOfQuota(model)) { log(`${model}: дневной лимит исчерпан, пропускаю`); continue; }
+    if (isOutOfQuota(model)) continue;  // уже помечена, о причине сказано при пометке
     try {
       const t0 = performance.now();
       let result;
