@@ -1,15 +1,15 @@
 // Chào! — веб-версия. Диалог (живой перевод, запись, текст), фото, история, настройки.
 
-import { store } from './store.js?v=202608281615';
-import { gemini, LiveSession } from './gemini.js?v=202608281615';
-import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608281615';
-import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608281615';
-import { iconSVG, renderIcons } from './icons.js?v=202608281615';
-import { PHRASES } from './phrases.js?v=202608281615';
-import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202608281615';
+import { store } from './store.js?v=202608281630';
+import { gemini, LiveSession } from './gemini.js?v=202608281630';
+import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608281630';
+import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608281630';
+import { iconSVG, renderIcons } from './icons.js?v=202608281630';
+import { PHRASES } from './phrases.js?v=202608281630';
+import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202608281630';
 
 const $ = (id) => document.getElementById(id);
-const VERSION = '202608281615';
+const VERSION = '202608281630';
 
 let deferredInstall = null;
 addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredInstall = e; });
@@ -25,7 +25,9 @@ let messages = store.getCurrent();
 
 // Текущие фото: images — страницы одного меню/документа, chat — вопросы по ним
 const MAX_PHOTOS = 6;
-let photo = { images: [], result: null, order: new Map(), chat: [], asking: false, analyzing: false, error: null, historyId: null };
+// Документ, с которым сейчас работаем: страницы со своим разбором у каждой,
+// собранный по ним заказ и вопросы по документу целиком.
+let photo = { pages: [], order: new Map(), chat: [], asking: false, historyId: null };
 
 // ------------------------------------------------------------------ запуск
 
@@ -619,79 +621,104 @@ async function addPhotos(files) {
   const list = [...(files || [])];
   if (!list.length) return;
 
-  const free = MAX_PHOTOS - photo.images.length;
+  const free = MAX_PHOTOS - photo.pages.length;
   if (free <= 0) { toast(`Больше ${MAX_PHOTOS} страниц за раз не получится`); return; }
   if (list.length > free) toast(`Возьму первые ${plural(free, 'страницу', 'страницы', 'страниц')} — это предел`);
 
-  photo.result = null;
-  renderPhoto();
+  const added = [];
   try {
     for (const file of list.slice(0, free)) {
-      photo.images.push(await compressImage(file));
+      const { dataUrl, base64 } = await compressImage(file);
+      const page = { dataUrl, base64, result: null, analyzing: true, error: null };
+      photo.pages.push(page);
+      added.push(page);
       renderPhoto();
     }
   } catch (e) {
     log(`фото: ${e.message}`);
     toast(e.message);
   }
-  if (photo.images.length) analyzePhotos();
+  // Страницы разбираются по очереди: каждая знает разделы предыдущих и
+  // дописывается к общему списку, поэтому готовое с экрана не пропадает.
+  for (const page of added) await analyzePage(page);
 }
 
-async function analyzePhotos() {
-  photo.result = null;
-  photo.error = null;
-  photo.analyzing = true;
-  $('orderBtn').classList.add('hidden');
+/// Что уже известно о документе — подсказка модели, чтобы разделы совпали.
+function knownSoFar() {
+  const titles = new Set();
+  let isMenu = false;
+  for (const p of photo.pages) {
+    if (!p.result) continue;
+    if (p.result.isMenu) isMenu = true;
+    for (const sec of p.result.sections || []) if (sec.title) titles.add(sec.title);
+  }
+  return { isMenu, sections: [...titles] };
+}
+
+async function analyzePage(page) {
+  page.analyzing = true;
+  page.error = null;
   renderPhoto();
   try {
-    photo.result = await gemini.translatePhoto(photo.images.map(i => i.base64));
-    // Набор перечитан целиком, ключи блюд сменились — переносим собранный заказ
-    // по вьетнамскому названию: оно между разборами стабильно, а русский перевод
-    // модель каждый раз формулирует чуть иначе. Отметки блюд, которых в новом
-    // разборе нет, отпадают сами — иначе они завышали бы счётчик как фантомы.
-    const byOriginal = new Map();
-    for (const [key, n] of photo.order) byOriginal.set(key.split('|')[0], n);
-    const moved = new Map();
-    for (const sec of photo.result.sections || []) {
-      for (const dish of sec.items || []) {
-        const n = byOriginal.get(dish.original);
-        if (n) moved.set(dish.original + '|' + dish.translation, n);
-      }
-    }
-    photo.order = moved;
-    savePhotoToHistory(photo.images[0].dataUrl, photo.result);
+    page.result = await gemini.translatePhoto([page.base64], knownSoFar());
   } catch (e) {
     log(`фото: ${e.message}`);
-    photo.error = e.message;
+    page.error = e.message;
   }
-  photo.analyzing = false;
+  page.analyzing = false;
   renderPhoto();
+  if (photo.pages.some(p => p.result)) savePhotoToHistory();
+}
+
+/// Общий вид документа — склейка разборов всех страниц. Разделы с одинаковым
+/// названием объединяются, поэтому меню на трёх листах читается одним списком.
+function mergedResult() {
+  const done = photo.pages.filter(p => p.result);
+  if (!done.length) return null;
+  const merged = { isMenu: done.some(p => p.result.isMenu), summary: '', blocks: [], sections: [] };
+  const byTitle = new Map();
+  for (const p of done) {
+    const r = p.result;
+    if (r.summary && !merged.summary) merged.summary = r.summary;
+    for (const b of r.blocks || []) merged.blocks.push(b);
+    for (const sec of r.sections || []) {
+      const key = (sec.title || '').trim().toLowerCase();
+      const existing = byTitle.get(key);
+      if (existing) existing.items.push(...(sec.items || []));
+      else {
+        const copy = { title: sec.title, items: [...(sec.items || [])] };
+        byTitle.set(key, copy);
+        merged.sections.push(copy);
+      }
+    }
+  }
+  return merged;
 }
 
 function removePhotoAt(index) {
-  photo.images.splice(index, 1);
-  photo.order.clear();
-  if (photo.images.length) analyzePhotos();
-  else resetPhoto();
+  photo.pages.splice(index, 1);
+  if (!photo.pages.length) { resetPhoto(); return; }
+  // Разбор каждой страницы хранится отдельно — убрать её можно без запроса.
+  renderPhoto();
+  savePhotoToHistory();
 }
 
-/// Кнопка в шапке работает как «карандаш» в диалоге: начинает новое,
-/// а разобранное остаётся в истории — об этом и говорит подсказка.
 function resetPhoto(announce) {
   const saved = announce && photo.historyId;
-  photo = { images: [], result: null, order: new Map(), chat: [], asking: false, analyzing: false, error: null, historyId: null };
+  photo = { pages: [], order: new Map(), chat: [], asking: false, historyId: null };
   $('photoAsk').value = '';
   renderPhoto();
   if (saved) toast('Снимок сохранён в историю');
 }
 
-async function savePhotoToHistory(dataUrl, result) {
+async function savePhotoToHistory() {
+  const result = mergedResult();
+  const first = photo.pages.find(p => p.result);
+  if (!result || !first) return;
   try {
     // Для истории — маленькое превью, чтобы не выесть хранилище.
-    const blob = await (await fetch(dataUrl)).blob();
+    const blob = await (await fetch(first.dataUrl)).blob();
     const { dataUrl: thumb } = await compressImage(blob, 420, 0.55);
-    // Добавленная страница запускает разбор заново: заменяем прежнюю запись,
-    // иначе одно меню копится в истории по разу на каждую страницу.
     if (photo.historyId) store.removePhoto(photo.historyId);
     photo.historyId = crypto.randomUUID();
     store.addPhoto({ id: photo.historyId, ts: Date.now(), thumb, result });
@@ -703,7 +730,7 @@ async function savePhotoToHistory(dataUrl, result) {
 async function askAboutPhoto() {
   const input = $('photoAsk');
   const text = input.value.trim();
-  if (!text || photo.asking || !photo.images.length) return;
+  if (!text || photo.asking || !photo.pages.length) return;
 
   input.value = '';
   photo.chat.push({ role: 'user', text });
@@ -719,7 +746,7 @@ async function askAboutPhoto() {
   }, 12000);
 
   try {
-    const answer = await gemini.askPhoto(photo.images.map(i => i.base64), photo.chat);
+    const answer = await gemini.askPhoto(photo.pages.map(p => p.base64), photo.chat);
     photo.chat.push({ role: 'model', text: answer });
   } catch (e) {
     log(`вопрос по фото: ${e.message}`);
@@ -729,13 +756,6 @@ async function askAboutPhoto() {
   photo.asking = false;
   renderPhoto();
   updatePhotoBar();
-}
-
-/// Готовые вопросы под то, что на фото: иначе поле ввода легко не заметить.
-function quickQuestions() {
-  if (photo.result?.isMenu) return ['Что тут острое?', 'Есть блюда без мяса?', 'Что посоветуешь?'];
-  if (photo.result) return ['Что мне делать?', 'Есть тут сроки или даты?', 'Объясни попроще'];
-  return ['Что тут написано?', 'Что мне делать?'];
 }
 
 /// Модель отвечает с markdown-разметкой. Жирным она выделяет как раз то,
@@ -751,12 +771,19 @@ function richText(raw) {
   return html;
 }
 
-function chatHTML() {
-  if (!photo.images.length) return '';
+/// Готовые вопросы под то, что на фото: иначе поле ввода легко не заметить.
+function quickQuestions(result) {
+  if (result?.isMenu) return ['Что тут острое?', 'Есть блюда без мяса?', 'Что посоветуешь?'];
+  if (result) return ['Что мне делать?', 'Есть тут сроки или даты?', 'Объясни попроще'];
+  return ['Что тут написано?', 'Что мне делать?'];
+}
+
+function chatHTML(result) {
+  if (!photo.pages.length) return '';
   let html = '<div class="qa">';
   if (!photo.chat.length) {
     html += `<div class="qa-hint">${iconSVG('chat', 18)}Что-то непонятно? Спросите об этом фото — прямо словами, как у знакомого.</div>
-      <div class="qa-chips">${quickQuestions().map(q => `<button class="chip" data-q="${escapeHtml(q)}">${escapeHtml(q)}</button>`).join('')}</div>`;
+      <div class="qa-chips">${quickQuestions(result).map(q => `<button class="chip" data-q="${escapeHtml(q)}">${escapeHtml(q)}</button>`).join('')}</div>`;
   }
   for (const m of photo.chat) {
     const body = m.role === 'user' || m.failed ? escapeHtml(m.text) : richText(m.text);
@@ -771,7 +798,7 @@ function renderPhoto() {
   box.innerHTML = '';
   updatePhotoBar();
 
-  if (!photo.images.length) {
+  if (!photo.pages.length) {
     box.innerHTML = `<div class="empty"><div class="empty-icon">${iconSVG('scan', 52)}</div>
       <h3>Что тут написано?</h3>
       <p>Снимите меню — разберу блюда и помогу собрать заказ.<br>Снимите документ или вывеску — переведу и объясню суть.</p>
@@ -781,12 +808,14 @@ function renderPhoto() {
 
   // Лента страниц: миниатюры с крестиком + плитка «добавить»
   let strip = '<div class="strip">';
-  photo.images.forEach((im, i) => {
-    strip += `<div class="strip-item"><img src="${im.dataUrl}" alt="страница ${i + 1}">
+  photo.pages.forEach((page, i) => {
+    strip += `<div class="strip-item${page.analyzing ? ' busy' : ''}${page.error ? ' failed' : ''}">
+      <img src="${page.dataUrl}" alt="страница ${i + 1}">
+      ${page.analyzing ? '<span class="strip-spin"></span>' : ''}
       <button class="strip-del" data-del="${i}" aria-label="убрать страницу ${i + 1}">${iconSVG('close', 15)}</button></div>`;
   });
-  if (photo.images.length < MAX_PHOTOS) {
-    strip += `<button class="strip-add" id="stripAdd" aria-label="добавить фото">${iconSVG('plus', 24)}<span>ещё</span></button>`;
+  if (photo.pages.length < MAX_PHOTOS) {
+    strip += `<button class="strip-add" id="stripAdd" aria-label="добавить страницу">${iconSVG('plus', 24)}<span>ещё</span></button>`;
   }
   strip += '</div>';
   box.insertAdjacentHTML('beforeend', strip);
@@ -795,25 +824,38 @@ function renderPhoto() {
   const add = box.querySelector('#stripAdd');
   if (add) add.addEventListener('click', () => $('fileGallery').click());
 
-  if (photo.analyzing) {
-    box.insertAdjacentHTML('beforeend', `
-      <div class="reading"><span class="pulse-dot"></span>Читаю текст ${photo.images.length > 1 ? 'на страницах' : 'на фото'}…</div>
-      <div class="skeleton-card"><span class="sk sk-title"></span><span class="sk sk-line"></span><span class="sk sk-line short"></span></div>
-      <div class="skeleton-card"><span class="sk sk-title"></span><span class="sk sk-line"></span></div>
-      <div class="skeleton-card"><span class="sk sk-title"></span><span class="sk sk-line"></span><span class="sk sk-line short"></span></div>`);
-  } else if (photo.error) {
+  const result = mergedResult();
+  const busy = photo.pages.filter(p => p.analyzing).length;
+  const failed = photo.pages.filter(p => p.error);
+
+  // Разобранное остаётся на экране: новая страница дописывается к нему,
+  // а не начинает всё заново.
+  if (busy) {
     box.insertAdjacentHTML('beforeend',
-      `<div class="error">${escapeHtml(photo.error)}</div>
-       <button class="btn ghost retry" id="photoRetry">Попробовать ещё раз</button>`);
-    box.querySelector('#photoRetry').addEventListener('click', analyzePhotos);
-  } else if (photo.result) {
-    box.insertAdjacentHTML('beforeend', renderResultHTML(photo.result, true));
+      `<div class="reading"><span class="pulse-dot"></span>${result ? 'Дополняю разбор' : `Читаю текст ${photo.pages.length > 1 ? 'на страницах' : 'на фото'}`}…</div>`);
+  }
+  if (result) {
+    box.insertAdjacentHTML('beforeend', renderResultHTML(result, true));
     bindDishHandlers(box);
     updateOrderBar();
+  } else if (!busy && failed.length) {
+    box.insertAdjacentHTML('beforeend',
+      `<div class="error">${escapeHtml(failed[0].error)}</div>
+       <button class="btn ghost retry" id="photoRetry">Попробовать ещё раз</button>`);
+    box.querySelector('#photoRetry').addEventListener('click', () => failed.forEach(analyzePage));
+  } else if (!busy && !result) {
+    box.insertAdjacentHTML('beforeend',
+      `<div class="skeleton-card"><span class="sk sk-title"></span><span class="sk sk-line"></span></div>`);
+  }
+  if (result && failed.length && !busy) {
+    box.insertAdjacentHTML('beforeend',
+      `<div class="page-failed">${plural(failed.length, 'Страницу', 'Страницы', 'Страниц')} не удалось разобрать —
+       <button class="linkish" id="retryFailed">попробовать ещё раз</button></div>`);
+    box.querySelector('#retryFailed').addEventListener('click', () => failed.forEach(analyzePage));
   }
 
   // Вопросы доступны всегда, пока есть снимки — даже если разбор не удался.
-  box.insertAdjacentHTML('beforeend', chatHTML());
+  box.insertAdjacentHTML('beforeend', chatHTML(result));
   box.querySelectorAll('[data-q]').forEach(b => b.addEventListener('click', () => {
     $('photoAsk').value = b.dataset.q;
     askAboutPhoto();
@@ -876,14 +918,20 @@ function bindDishHandlers(box) {
 }
 
 function updateOrderBar() {
-  const total = [...photo.order.values()].reduce((a, b) => a + b, 0);
+  // Считаем только по блюдам, которые сейчас в документе: убрали страницу —
+  // её отметки перестают учитываться, хотя и остаются на случай возврата.
+  const alive = new Set();
+  for (const sec of mergedResult()?.sections || []) {
+    for (const d of sec.items || []) alive.add(d.original + '|' + d.translation);
+  }
+  const total = [...photo.order.entries()].reduce((a, [k, n]) => a + (alive.has(k) ? n : 0), 0);
   $('orderBtn').classList.toggle('hidden', total === 0);
   $('orderLabel').textContent = `Показать заказ официанту · ${total}`;
 }
 
 /// Пока фото нет — крупные «Камера» и «Галерея»; как появилось — строка вопроса.
 function updatePhotoBar() {
-  const has = photo.images.length > 0;
+  const has = photo.pages.length > 0;
   $('pickers').classList.toggle('hidden', has);
   $('pickNote').classList.toggle('hidden', has);
   $('askRow').classList.toggle('hidden', !has);
@@ -894,7 +942,7 @@ function updatePhotoBar() {
 
 function showOrder() {
   const items = [];
-  for (const section of photo.result?.sections || []) {
+  for (const section of mergedResult()?.sections || []) {
     for (const dish of section.items || []) {
       const key = dish.original + '|' + dish.translation;
       const n = photo.order.get(key);

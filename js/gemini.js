@@ -1,8 +1,8 @@
 // Клиент Gemini: REST-цепочка с фолбэками + Live API по WebSocket.
 // Логика перенесена из нативной версии (Swift), протокол проверен в поле.
 
-import { store } from './store.js?v=202608281615';
-import { log } from './util.js?v=202608281615';
+import { store } from './store.js?v=202608281630';
+import { log } from './util.js?v=202608281630';
 
 const REST_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 const WS_URL = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
@@ -394,14 +394,19 @@ export const gemini = {
     return generate({ system: DIALOG_PROMPT, parts, schema: DIALOG_SCHEMA });
   },
 
-  /// Принимает одну или несколько картинок — все страницы разбираются как единое целое.
-  async translatePhoto(images) {
+  /// Разбирает одну страницу. `known` — что уже известно про документ из
+  /// прежних страниц: тип и названия разделов. Модель придерживается тех же
+  /// названий, чтобы страницы сошлись в один список, а не в набор дубликатов.
+  async translatePhoto(images, known) {
     const list = Array.isArray(images) ? images : [images];
-    const opts = {
-      system: PHOTO_PROMPT,
-      parts: list.map(data => ({ inlineData: { mimeType: 'image/jpeg', data } })),
-      schema: PHOTO_SCHEMA,
-    };
+    const parts = list.map(data => ({ inlineData: { mimeType: 'image/jpeg', data } }));
+    if (known?.sections?.length) {
+      parts.unshift({ text: `Это следующая страница того же ${known.isMenu ? 'меню' : 'документа'}.
+Разделы, уже разобранные на прошлых страницах: ${known.sections.join(', ')}.
+Если блюда на этой странице относятся к одному из них — назови раздел ровно так же.
+Разбирай ТОЛЬКО то, что видно на этой странице, ничего не повторяй с прошлых.` });
+    }
+    const opts = { system: PHOTO_PROMPT, parts, schema: PHOTO_SCHEMA };
     let r = repairPhotoResult(await generate(opts));
     if (photoIsEmpty(r)) {
       // Петля съела весь ответ: пробуем ещё раз, чуть подняв температуру ради другого пути генерации.
