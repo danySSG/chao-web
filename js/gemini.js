@@ -1,8 +1,8 @@
 // Клиент Gemini: REST-цепочка с фолбэками + Live API по WebSocket.
 // Логика перенесена из нативной версии (Swift), протокол проверен в поле.
 
-import { store } from './store.js?v=202608281549';
-import { log } from './util.js?v=202608281549';
+import { store } from './store.js?v=202608281605';
+import { log } from './util.js?v=202608281605';
 
 const REST_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 const WS_URL = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
@@ -19,6 +19,27 @@ const CHAIN = [
   'gemini-3.5-flash-lite',
 ];
 const LAST_RESORT = 'gemma-4-31b-it'; // только текст и фото, аудио не принимает
+
+// Модель, ответившая 429, помнится и пропускается: дневная квота flash-ярусов
+// (20 запросов) кончается быстро, а каждый заведомо провальный вызов — лишняя
+// секунда ожидания на КАЖДОМ запросе. Через полчаса пробуем снова: вдруг сброс.
+const QUOTA_KEY = 'chao.quota';
+const QUOTA_PAUSE = 30 * 60 * 1000;
+
+function quotaMap() {
+  try { return JSON.parse(localStorage.getItem(QUOTA_KEY)) || {}; } catch { return {}; }
+}
+function isOutOfQuota(model) {
+  const until = quotaMap()[model];
+  return typeof until === 'number' && Date.now() < until;
+}
+function markOutOfQuota(model) {
+  try {
+    const map = quotaMap();
+    map[model] = Date.now() + QUOTA_PAUSE;
+    localStorage.setItem(QUOTA_KEY, JSON.stringify(map));
+  } catch {}
+}
 
 const DIALOG_PROMPT = `Ты — профессиональный переводчик-синхронист между русским и вьетнамским языками, работаешь во Вьетнаме.
 На вход приходит либо аудиозапись живой речи, либо текст.
@@ -143,7 +164,7 @@ function friendly(status, message) {
   return message || `Ошибка сервера (HTTP ${status})`;
 }
 
-async function callModel(model, { system, parts, contents, schema, maxTokens = 32768, temperature = 0.2 }) {
+async function callModel(model, { system, parts, contents, schema, maxTokens = 32768, temperature = 0.2, thinking = 'low' }) {
   const key = store.getKey();
   if (!key) throw new GeminiError('Не задан ключ Gemini. Добавьте его в Настройках.', 'nokey');
 
@@ -153,6 +174,10 @@ async function callModel(model, { system, parts, contents, schema, maxTokens = 3
   // Держим его высоким: в этот же бюджет входят «размышления» модели
   // (thoughtsTokenCount), и на длинном меню они съедают больше, чем сам ответ.
   const generationConfig = { maxOutputTokens: maxTokens, temperature };
+  // Без ограничения модель уходит в размышления на десятки тысяч токенов
+  // (мелкий текст на фото провоцирует это надёжно) — минута ожидания и обрыв
+  // по потолку вместо ответа. На качестве разбора меню «low» не сказывается.
+  if (thinking && !isGemma) generationConfig.thinkingConfig = { thinkingLevel: thinking };
   if (schema) {
     generationConfig.responseMimeType = 'application/json';
     if (isGemma) generationConfig.responseJsonSchema = toStandardSchema(schema);
@@ -181,6 +206,7 @@ async function callModel(model, { system, parts, contents, schema, maxTokens = 3
   if (!res.ok) {
     let msg = '';
     try { msg = (await res.json())?.error?.message || ''; } catch {}
+    if (res.status === 429) markOutOfQuota(model);
     const err = new GeminiError(friendly(res.status, msg), res.status === 429 ? 'quota' : 'api');
     err.status = res.status;
     err.raw = msg;
@@ -196,7 +222,7 @@ async function callModel(model, { system, parts, contents, schema, maxTokens = 3
       throw new GeminiError('Gemini отказался отвечать: сработал фильтр контента.', 'blocked');
     }
     if (reason === 'MAX_TOKENS') {
-      throw new GeminiError('На фото слишком много текста. Снимите его частями.', 'toolong');
+      throw new GeminiError('Модель не справилась с этим фото — попробуйте ещё раз.', 'toolong');
     }
     throw new GeminiError('Gemini вернул пустой ответ. Попробуйте ещё раз.', 'empty');
   }
@@ -206,7 +232,9 @@ async function callModel(model, { system, parts, contents, schema, maxTokens = 3
     // Обрыв по лимиту токенов даёт синтаксически неполный JSON — это не «сломанный ответ»,
     // а слишком длинный: сообщаем человеку то, что он может исправить.
     if (reason === 'MAX_TOKENS') {
-      throw new GeminiError('На фото слишком много текста — ответ не поместился. Снимите его частями.', 'toolong');
+      // Обрыв по потолку почти всегда означает не «много текста», а срыв модели
+      // в бесконечные рассуждения: повтор обычно проходит нормально.
+      throw new GeminiError('Модель не справилась с этим фото — попробуйте ещё раз.', 'toolong');
     }
     throw new GeminiError('Не удалось разобрать ответ Gemini.', 'parse');
   }
@@ -219,9 +247,19 @@ async function generate(opts) {
   let lastErr = null;
 
   for (const model of chain) {
+    if (isOutOfQuota(model)) { log(`${model}: дневной лимит исчерпан, пропускаю`); continue; }
     try {
       const t0 = performance.now();
-      const result = await callModel(model, opts);
+      let result;
+      try {
+        result = await callModel(model, opts);
+      } catch (e) {
+        // Формат thinkingConfig у Google периодически меняется — повторяем без него.
+        if (/thinking|unknown name|invalid json/i.test(e.raw || e.message || '')) {
+          log(`${model}: thinkingConfig не принят, повторяю без него`);
+          result = await callModel(model, { ...opts, thinking: null });
+        } else throw e;
+      }
       log(`${model}: ответ за ${Math.round(performance.now() - t0)} мс`);
       return result;
     } catch (e) {

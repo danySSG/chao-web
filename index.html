@@ -10,7 +10,7 @@
 <meta name="theme-color" content="#F0532E">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon.png">
-<link rel="stylesheet" href="css/style.css?v=202608281549">
+<link rel="stylesheet" href="css/style.css?v=202608281605">
 <title>Chào! — переводчик</title>
 <meta name="description" content="Живой перевод русский ↔ вьетнамский: говорите голосом, фотографируйте меню и документы. Бесплатно, работает в браузере.">
 <!-- Карточка при отправке ссылки в мессенджерах -->
@@ -144,7 +144,7 @@
           <div class="empty-icon" data-icon="scan" data-icon-size="52"></div>
           <h3>Что тут написано?</h3>
           <p>Снимите меню — разберу блюда и помогу собрать заказ.<br>Снимите документ или вывеску — переведу и объясню суть.</p>
-          <p class="empty-note">Можно сразу несколько страниц — разберу их как одно целое.</p>
+          <p class="empty-note">Многостраничное меню снимайте целиком: отметьте в галерее все страницы разом — разберу их как одно меню.</p>
         </div>
       </div>
     </div>
@@ -154,6 +154,7 @@
         <button class="btn primary" id="cameraBtn"><span data-icon="camera" data-icon-size="20"></span>Камера</button>
         <button class="btn ghost" id="galleryBtn"><span data-icon="image" data-icon-size="20"></span>Галерея</button>
       </div>
+      <div class="pick-note" id="pickNote">В галерее можно отметить сразу несколько страниц</div>
       <div class="askrow hidden" id="askRow">
         <button class="round small ghost-round" id="cameraBtn2" title="Снять ещё"><span data-icon="camera" data-icon-size="21"></span></button>
         <input type="text" id="photoAsk" placeholder="Спросить об этом фото…" autocomplete="off">
@@ -252,6 +253,6 @@
 
 <div id="toast" class="toast hidden"></div>
 
-<script type="module" src="js/app.js?v=202608281549"></script>
+<script type="module" src="js/app.js?v=202608281605"></script>
 </body>
 </html>

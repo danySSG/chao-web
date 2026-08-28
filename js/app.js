@@ -1,15 +1,15 @@
 // Chào! — веб-версия. Диалог (живой перевод, запись, текст), фото, история, настройки.
 
-import { store } from './store.js?v=202608281549';
-import { gemini, LiveSession } from './gemini.js?v=202608281549';
-import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608281549';
-import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608281549';
-import { iconSVG, renderIcons } from './icons.js?v=202608281549';
-import { PHRASES } from './phrases.js?v=202608281549';
-import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202608281549';
+import { store } from './store.js?v=202608281605';
+import { gemini, LiveSession } from './gemini.js?v=202608281605';
+import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608281605';
+import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608281605';
+import { iconSVG, renderIcons } from './icons.js?v=202608281605';
+import { PHRASES } from './phrases.js?v=202608281605';
+import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202608281605';
 
 const $ = (id) => document.getElementById(id);
-const VERSION = '202608281549';
+const VERSION = '202608281605';
 
 let deferredInstall = null;
 addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredInstall = e; });
@@ -770,7 +770,7 @@ function renderPhoto() {
     box.innerHTML = `<div class="empty"><div class="empty-icon">${iconSVG('scan', 52)}</div>
       <h3>Что тут написано?</h3>
       <p>Снимите меню — разберу блюда и помогу собрать заказ.<br>Снимите документ или вывеску — переведу и объясню суть.</p>
-      <p class="empty-note">Можно сразу несколько страниц — разберу их как одно целое.</p></div>`;
+      <p class="empty-note">Многостраничное меню снимайте целиком: отметьте в галерее все страницы разом — разберу их как одно меню.</p></div>`;
     return;
   }
 
@@ -880,6 +880,7 @@ function updateOrderBar() {
 function updatePhotoBar() {
   const has = photo.images.length > 0;
   $('pickers').classList.toggle('hidden', has);
+  $('pickNote').classList.toggle('hidden', has);
   $('askRow').classList.toggle('hidden', !has);
   $('photoResetWrap').classList.toggle('hidden', !has);
   $('photoSend').disabled = photo.asking || !$('photoAsk').value.trim();
