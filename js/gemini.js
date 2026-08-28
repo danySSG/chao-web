@@ -1,8 +1,8 @@
 // Клиент Gemini: REST-цепочка с фолбэками + Live API по WebSocket.
 // Логика перенесена из нативной версии (Swift), протокол проверен в поле.
 
-import { store } from './store.js?v=202608281707';
-import { log } from './util.js?v=202608281707';
+import { store } from './store.js?v=202608281716';
+import { log } from './util.js?v=202608281716';
 
 const REST_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 const WS_URL = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
@@ -29,6 +29,7 @@ const CHAIN_DIALOG = [
   'gemini-3.5-flash',
 ];
 const CHAIN_PHOTO = [
+  'gemini-3.7-flash',  // новее 3.6; пока часто отвечает 503 — цепочка это переживает
   'gemini-3.6-flash',
   'gemini-3.5-flash',
   'gemini-3-flash-preview',
@@ -267,6 +268,12 @@ async function callModel(model, { system, parts, contents, schema, maxTokens = 1
   if (!res.ok) {
     let msg = '';
     try { msg = (await res.json())?.error?.message || ''; } catch {}
+    if (res.status === 503 || /high demand|overloaded/i.test(msg)) {
+      // Перегруженная модель отвечает отказом за пару секунд — но на каждом
+      // запросе. Пара минут паузы дешевле, чем этот налог на всю цепочку.
+      markOutOfQuota(model, 3 * 60 * 1000);
+      log(`${model}: перегружена, пропускаю 3 мин`);
+    }
     if (res.status === 429) {
       const isDaily = /PerDay/i.test(msg) || /per day/i.test(msg);
       const pause = retryPause(msg, isDaily);
