@@ -247,6 +247,10 @@ select {
 .howto p { font-size: 13.5px; line-height: 1.5; color: var(--muted); margin: 9px 0 0; }
 .howto b { color: var(--fg); }
 .howto .hl { color: var(--accent); font-weight: 700; }
+.howto .warn {
+  background: var(--card-2); border-left: 3px solid var(--accent);
+  border-radius: 0 12px 12px 0; padding: 10px 12px; margin-top: 11px;
+}
 
 /* Вопросы по фото */
 .qa { margin-top: 18px; display: grid; gap: 9px; }
