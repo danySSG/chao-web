@@ -187,6 +187,62 @@ input:focus { outline: none; border-color: var(--accent); }
 .pickers { display: flex; gap: 10px; margin-bottom: 14px; }
 .pickers .btn { padding: 13px; }
 .preview { width: 100%; border-radius: 20px; margin-bottom: 14px; display: block; }
+
+/* Лента страниц: снятые фото одного меню/документа */
+.strip {
+  display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 14px;
+  scrollbar-width: none; -webkit-overflow-scrolling: touch;
+}
+.strip::-webkit-scrollbar { display: none; }
+.strip-item { position: relative; flex: none; }
+.strip-item img {
+  width: 78px; height: 78px; object-fit: cover; border-radius: 14px; display: block;
+  border: 1.5px solid var(--card-2);
+}
+.strip-del {
+  position: absolute; top: -5px; right: -5px; width: 23px; height: 23px; border-radius: 50%;
+  background: var(--fg); color: var(--bg); display: grid; place-items: center; padding: 0;
+  box-shadow: 0 1px 4px rgba(0,0,0,.3);
+}
+.strip-del [data-icon], .strip-del svg { color: var(--bg); }
+.strip-add {
+  flex: none; width: 78px; height: 78px; border-radius: 14px; padding: 0;
+  border: 1.5px dashed var(--card-2); background: var(--card);
+  display: grid; place-items: center; gap: 1px; color: var(--muted);
+}
+.strip-add span { font-size: 11px; font-weight: 600; }
+.strip-add svg { color: var(--muted); }
+.empty-note { margin-top: 10px; font-size: 13px; opacity: .8; }
+.retry { width: 100%; margin-top: 10px; }
+
+/* Вопросы по фото */
+.qa { margin-top: 18px; display: grid; gap: 9px; }
+.qa-hint {
+  display: flex; gap: 9px; align-items: flex-start;
+  font-size: 13px; color: var(--muted); background: var(--card);
+  border-radius: 14px; padding: 12px 14px; line-height: 1.45;
+}
+.qa-hint svg { flex: none; color: var(--accent); margin-top: 1px; }
+.qa-chips { display: flex; flex-wrap: wrap; gap: 7px; }
+.qa-msg {
+  max-width: 88%; padding: 11px 14px; border-radius: 18px; font-size: 15px; line-height: 1.45;
+  white-space: pre-wrap;
+}
+.qa-msg.you {
+  justify-self: end; background: linear-gradient(180deg, var(--accent), var(--accent-2)); color: #fff;
+  border-bottom-right-radius: 6px; font-weight: 600;
+}
+.qa-msg.ai { justify-self: start; background: var(--card); border-bottom-left-radius: 6px; }
+.qa-msg.failed { background: var(--card); color: var(--red); }
+.qa-msg.typing { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+
+/* Строка вопроса в нижней панели раздела «Фото» */
+.askrow { display: flex; gap: 8px; align-items: center; }
+.askrow input { flex: 1; min-width: 0; border-radius: 22px; padding: 12px 15px; }
+.round.small { width: 46px; height: 46px; }
+.round.ghost-round { background: var(--card); }
+.round.ghost-round [data-icon], .round.ghost-round svg { color: var(--accent); }
+.ghost-slot { visibility: hidden; }
 .hint-tap { text-align: center; font-size: 13px; color: var(--muted); margin-bottom: 12px; }
 .section-title { font-size: 13px; font-weight: 800; color: var(--accent); letter-spacing: .04em; margin: 16px 0 8px 4px; }
 .dish {

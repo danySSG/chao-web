@@ -10,7 +10,7 @@
 <meta name="theme-color" content="#F0532E">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon.png">
-<link rel="stylesheet" href="css/style.css?v=202608271615">
+<link rel="stylesheet" href="css/style.css?v=202608281517">
 <title>Chào! — переводчик</title>
 <meta name="description" content="Живой перевод русский ↔ вьетнамский: говорите голосом, фотографируйте меню и документы. Бесплатно, работает в браузере.">
 <!-- Карточка при отправке ссылки в мессенджерах -->
@@ -131,23 +131,33 @@
 
   <!-- ФОТО -->
   <section class="screen hidden" id="tab-photo">
-    <header class="bar"><h2>Фото</h2></header>
+    <header class="bar">
+      <span class="icon-btn ghost-slot" aria-hidden="true"></span>
+      <h2>Фото</h2>
+      <span id="photoResetWrap" class="hidden"><button class="icon-btn" id="photoReset" title="Начать заново"><span data-icon="trash" data-icon-size="19"></span></button></span>
+    </header>
     <div class="content" id="photoContent">
       <input type="file" id="fileCamera" accept="image/*" capture="environment" hidden>
-      <input type="file" id="fileGallery" accept="image/*" hidden>
+      <input type="file" id="fileGallery" accept="image/*" multiple hidden>
       <div id="photoResult">
         <div class="empty">
           <div class="empty-icon" data-icon="scan" data-icon-size="52"></div>
           <h3>Что тут написано?</h3>
           <p>Снимите меню — разберу блюда и помогу собрать заказ.<br>Снимите документ или вывеску — переведу и объясню суть.</p>
+          <p class="empty-note">Можно сразу несколько страниц — разберу их как одно целое.</p>
         </div>
       </div>
     </div>
     <footer class="photobar">
       <button class="btn primary order hidden" id="orderBtn"><span data-icon="hand" data-icon-size="20"></span><span id="orderLabel">Показать заказ официанту</span></button>
-      <div class="pickers">
+      <div class="pickers" id="pickers">
         <button class="btn primary" id="cameraBtn"><span data-icon="camera" data-icon-size="20"></span>Камера</button>
         <button class="btn ghost" id="galleryBtn"><span data-icon="image" data-icon-size="20"></span>Галерея</button>
+      </div>
+      <div class="askrow hidden" id="askRow">
+        <button class="round small ghost-round" id="cameraBtn2" title="Снять ещё"><span data-icon="camera" data-icon-size="21"></span></button>
+        <input type="text" id="photoAsk" placeholder="Спросить об этом фото…" autocomplete="off">
+        <button class="round small send" id="photoSend" title="Спросить"><span data-icon="arrowUp" data-icon-size="21"></span></button>
       </div>
     </footer>
   </section>
@@ -242,6 +252,6 @@
 
 <div id="toast" class="toast hidden"></div>
 
-<script type="module" src="js/app.js?v=202608271615"></script>
+<script type="module" src="js/app.js?v=202608281517"></script>
 </body>
 </html>

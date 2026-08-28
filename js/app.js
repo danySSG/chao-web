@@ -1,15 +1,15 @@
 // Chào! — веб-версия. Диалог (живой перевод, запись, текст), фото, история, настройки.
 
-import { store } from './store.js?v=202608271615';
-import { gemini, LiveSession } from './gemini.js?v=202608271615';
-import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608271615';
-import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608271615';
-import { iconSVG, renderIcons } from './icons.js?v=202608271615';
-import { PHRASES } from './phrases.js?v=202608271615';
-import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202608271615';
+import { store } from './store.js?v=202608281517';
+import { gemini, LiveSession } from './gemini.js?v=202608281517';
+import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608281517';
+import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608281517';
+import { iconSVG, renderIcons } from './icons.js?v=202608281517';
+import { PHRASES } from './phrases.js?v=202608281517';
+import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202608281517';
 
 const $ = (id) => document.getElementById(id);
-const VERSION = '202608271615';
+const VERSION = '202608281517';
 
 let deferredInstall = null;
 addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredInstall = e; });
@@ -23,8 +23,9 @@ let busy = false;
 let wakeLock = null;
 let messages = store.getCurrent();
 
-// Текущее фото
-let photo = { dataUrl: null, result: null, order: new Map() };
+// Текущие фото: images — страницы одного меню/документа, chat — вопросы по ним
+const MAX_PHOTOS = 6;
+let photo = { images: [], result: null, order: new Map(), chat: [], asking: false, analyzing: false, error: null };
 
 // ------------------------------------------------------------------ запуск
 
@@ -66,10 +67,15 @@ function boot() {
 
   // фото
   $('cameraBtn').addEventListener('click', () => $('fileCamera').click());
+  $('cameraBtn2').addEventListener('click', () => $('fileCamera').click());
   $('galleryBtn').addEventListener('click', () => $('fileGallery').click());
-  $('fileCamera').addEventListener('change', (e) => handlePhoto(e.target.files[0]));
-  $('fileGallery').addEventListener('change', (e) => handlePhoto(e.target.files[0]));
+  $('fileCamera').addEventListener('change', (e) => { addPhotos(e.target.files); e.target.value = ''; });
+  $('fileGallery').addEventListener('change', (e) => { addPhotos(e.target.files); e.target.value = ''; });
   $('orderBtn').addEventListener('click', showOrder);
+  $('photoAsk').addEventListener('keydown', (e) => { if (e.key === 'Enter') askAboutPhoto(); });
+  $('photoAsk').addEventListener('input', updatePhotoBar);
+  $('photoSend').addEventListener('click', askAboutPhoto);
+  $('photoReset').addEventListener('click', resetPhoto);
 
   // история
   $('histClose').addEventListener('click', () => $('history').classList.add('hidden'));
@@ -608,24 +614,56 @@ function newSession() {
 
 // ------------------------------------------------------------------ фото
 
-async function handlePhoto(file) {
-  if (!file) return;
-  photo = { dataUrl: null, result: null, order: new Map() };
-  $('orderBtn').classList.add('hidden');
-  $('photoResult').innerHTML = `<div class="loading"><div class="spinner"></div>Готовлю снимок…</div>`;
+async function addPhotos(files) {
+  const list = [...(files || [])];
+  if (!list.length) return;
 
+  const free = MAX_PHOTOS - photo.images.length;
+  if (free <= 0) { toast(`Больше ${MAX_PHOTOS} страниц за раз не получится`); return; }
+  if (list.length > free) toast(`Возьму первые ${plural(free, 'страницу', 'страницы', 'страниц')} — это предел`);
+
+  photo.result = null;
+  renderPhoto();
   try {
-    const { dataUrl, base64 } = await compressImage(file);
-    photo.dataUrl = dataUrl;
-    renderPhoto();
-    const result = await gemini.translatePhoto(base64);
-    photo.result = result;
-    savePhotoToHistory(dataUrl, result);
-    renderPhoto();
+    for (const file of list.slice(0, free)) {
+      photo.images.push(await compressImage(file));
+      renderPhoto();
+    }
   } catch (e) {
     log(`фото: ${e.message}`);
-    $('photoResult').innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`;
+    toast(e.message);
   }
+  if (photo.images.length) analyzePhotos();
+}
+
+async function analyzePhotos() {
+  photo.result = null;
+  photo.error = null;
+  photo.analyzing = true;
+  $('orderBtn').classList.add('hidden');
+  renderPhoto();
+  try {
+    photo.result = await gemini.translatePhoto(photo.images.map(i => i.base64));
+    savePhotoToHistory(photo.images[0].dataUrl, photo.result);
+  } catch (e) {
+    log(`фото: ${e.message}`);
+    photo.error = e.message;
+  }
+  photo.analyzing = false;
+  renderPhoto();
+}
+
+function removePhotoAt(index) {
+  photo.images.splice(index, 1);
+  photo.order.clear();
+  if (photo.images.length) analyzePhotos();
+  else resetPhoto();
+}
+
+function resetPhoto() {
+  photo = { images: [], result: null, order: new Map(), chat: [], asking: false, analyzing: false, error: null };
+  $('photoAsk').value = '';
+  renderPhoto();
 }
 
 async function savePhotoToHistory(dataUrl, result) {
@@ -637,33 +675,105 @@ async function savePhotoToHistory(dataUrl, result) {
   } catch {}
 }
 
+// ------------------------------------------------------- вопросы по фото
+
+async function askAboutPhoto() {
+  const input = $('photoAsk');
+  const text = input.value.trim();
+  if (!text || photo.asking || !photo.images.length) return;
+
+  input.value = '';
+  photo.chat.push({ role: 'user', text });
+  photo.asking = true;
+  renderPhoto();
+  updatePhotoBar();
+
+  try {
+    const answer = await gemini.askPhoto(photo.images.map(i => i.base64), photo.chat);
+    photo.chat.push({ role: 'model', text: answer });
+  } catch (e) {
+    log(`вопрос по фото: ${e.message}`);
+    photo.chat.push({ role: 'model', text: e.message, failed: true });
+  }
+  photo.asking = false;
+  renderPhoto();
+  updatePhotoBar();
+}
+
+/// Готовые вопросы под то, что на фото: иначе поле ввода легко не заметить.
+function quickQuestions() {
+  if (photo.result?.isMenu) return ['Что тут острое?', 'Есть блюда без мяса?', 'Что посоветуешь?'];
+  if (photo.result) return ['Что мне делать?', 'Есть тут сроки или даты?', 'Объясни попроще'];
+  return ['Что тут написано?', 'Что мне делать?'];
+}
+
+function chatHTML() {
+  if (!photo.images.length) return '';
+  let html = '<div class="qa">';
+  if (!photo.chat.length) {
+    html += `<div class="qa-hint">${iconSVG('chat', 18)}Что-то непонятно? Спросите об этом фото — прямо словами, как у знакомого.</div>
+      <div class="qa-chips">${quickQuestions().map(q => `<button class="chip" data-q="${escapeHtml(q)}">${escapeHtml(q)}</button>`).join('')}</div>`;
+  }
+  for (const m of photo.chat) {
+    html += `<div class="qa-msg ${m.role === 'user' ? 'you' : 'ai'}${m.failed ? ' failed' : ''}">${escapeHtml(m.text)}</div>`;
+  }
+  if (photo.asking) html += `<div class="qa-msg ai typing"><span class="pulse-dot"></span>Думаю…</div>`;
+  return html + '</div>';
+}
+
 function renderPhoto() {
   const box = $('photoResult');
   box.innerHTML = '';
-  if (!photo.dataUrl && !photo.result) {
+  updatePhotoBar();
+
+  if (!photo.images.length) {
     box.innerHTML = `<div class="empty"><div class="empty-icon">${iconSVG('scan', 52)}</div>
       <h3>Что тут написано?</h3>
-      <p>Снимите меню — разберу блюда и помогу собрать заказ.<br>Снимите документ или вывеску — переведу и объясню суть.</p></div>`;
+      <p>Снимите меню — разберу блюда и помогу собрать заказ.<br>Снимите документ или вывеску — переведу и объясню суть.</p>
+      <p class="empty-note">Можно сразу несколько страниц — разберу их как одно целое.</p></div>`;
     return;
   }
-  if (photo.dataUrl) {
-    const img = document.createElement('img');
-    img.className = 'preview';
-    img.src = photo.dataUrl;
-    box.appendChild(img);
+
+  // Лента страниц: миниатюры с крестиком + плитка «добавить»
+  let strip = '<div class="strip">';
+  photo.images.forEach((im, i) => {
+    strip += `<div class="strip-item"><img src="${im.dataUrl}" alt="страница ${i + 1}">
+      <button class="strip-del" data-del="${i}" aria-label="убрать страницу ${i + 1}">${iconSVG('close', 15)}</button></div>`;
+  });
+  if (photo.images.length < MAX_PHOTOS) {
+    strip += `<button class="strip-add" id="stripAdd" aria-label="добавить фото">${iconSVG('plus', 24)}<span>ещё</span></button>`;
   }
-  const r = photo.result;
-  if (!r) {
+  strip += '</div>';
+  box.insertAdjacentHTML('beforeend', strip);
+  box.querySelectorAll('[data-del]').forEach(b =>
+    b.addEventListener('click', () => removePhotoAt(Number(b.dataset.del))));
+  const add = box.querySelector('#stripAdd');
+  if (add) add.addEventListener('click', () => $('fileGallery').click());
+
+  if (photo.analyzing) {
     box.insertAdjacentHTML('beforeend', `
-      <div class="reading"><span class="pulse-dot"></span>Читаю текст на фото…</div>
+      <div class="reading"><span class="pulse-dot"></span>Читаю текст ${photo.images.length > 1 ? 'на страницах' : 'на фото'}…</div>
       <div class="skeleton-card"><span class="sk sk-title"></span><span class="sk sk-line"></span><span class="sk sk-line short"></span></div>
       <div class="skeleton-card"><span class="sk sk-title"></span><span class="sk sk-line"></span></div>
       <div class="skeleton-card"><span class="sk sk-title"></span><span class="sk sk-line"></span><span class="sk sk-line short"></span></div>`);
-    return;
+  } else if (photo.error) {
+    box.insertAdjacentHTML('beforeend',
+      `<div class="error">${escapeHtml(photo.error)}</div>
+       <button class="btn ghost retry" id="photoRetry">Попробовать ещё раз</button>`);
+    box.querySelector('#photoRetry').addEventListener('click', analyzePhotos);
+  } else if (photo.result) {
+    box.insertAdjacentHTML('beforeend', renderResultHTML(photo.result, true));
+    bindDishHandlers(box);
+    updateOrderBar();
   }
-  box.insertAdjacentHTML('beforeend', renderResultHTML(r, true));
-  bindDishHandlers(box);
-  updateOrderBar();
+
+  // Вопросы доступны всегда, пока есть снимки — даже если разбор не удался.
+  box.insertAdjacentHTML('beforeend', chatHTML());
+  box.querySelectorAll('[data-q]').forEach(b => b.addEventListener('click', () => {
+    $('photoAsk').value = b.dataset.q;
+    askAboutPhoto();
+  }));
+  if (photo.chat.length) box.lastElementChild.lastElementChild?.scrollIntoView({ block: 'nearest' });
 }
 
 function renderResultHTML(r, interactive) {
@@ -720,6 +830,16 @@ function updateOrderBar() {
   const total = [...photo.order.values()].reduce((a, b) => a + b, 0);
   $('orderBtn').classList.toggle('hidden', total === 0);
   $('orderLabel').textContent = `Показать заказ официанту · ${total}`;
+}
+
+/// Пока фото нет — крупные «Камера» и «Галерея»; как появилось — строка вопроса.
+function updatePhotoBar() {
+  const has = photo.images.length > 0;
+  $('pickers').classList.toggle('hidden', has);
+  $('askRow').classList.toggle('hidden', !has);
+  $('photoResetWrap').classList.toggle('hidden', !has);
+  $('photoSend').disabled = photo.asking || !$('photoAsk').value.trim();
+  $('photoAsk').disabled = photo.asking;
 }
 
 function showOrder() {

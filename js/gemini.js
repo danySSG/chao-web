@@ -1,8 +1,8 @@
 // Клиент Gemini: REST-цепочка с фолбэками + Live API по WebSocket.
 // Логика перенесена из нативной версии (Swift), протокол проверен в поле.
 
-import { store } from './store.js?v=202608271615';
-import { log } from './util.js?v=202608271615';
+import { store } from './store.js?v=202608281517';
+import { log } from './util.js?v=202608281517';
 
 const REST_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 const WS_URL = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
@@ -47,7 +47,25 @@ const PHOTO_PROMPT = `Ты — эксперт по вьетнамской кух
 и blocks — перевод по смысловым фрагментам: original (как в оригинале) и translation (по-русски).
 Сохраняй все числа, даты, суммы и имена точно.
 
-Заполняй только тот набор полей, который соответствует типу. Второй оставь пустым.`;
+Заполняй только тот набор полей, который соответствует типу. Второй оставь пустым.
+
+Если фотографий несколько — это страницы одного документа или меню. Разбери их как единое целое,
+по порядку, не повторяя одно и то же дважды.
+
+Все поля — только человеческий текст по-русски (кроме original — там язык оригинала).
+НИКОГДА не пиши в них служебных пометок, рассуждений о формате, слов вроде JSON, output, parseable,
+«Done», «OK», «Clean» и не повторяй одну и ту же фразу. summary — не длиннее 600 знаков.`;
+
+const PHOTO_CHAT_PROMPT = `Ты помогаешь русскоязычному человеку во Вьетнаме разобраться с тем, что на фотографии.
+
+Отвечай по-русски, коротко и по делу — 1–4 предложения, без вступлений и без повторения вопроса.
+Опирайся на то, что видно на фото. Если спрашивают о том, чего на фото нет, честно скажи об этом
+и подскажи, что можно сделать.
+Если просят сказать или написать фразу по-вьетнамски — дай фразу вьетнамскими буквами, а следом
+в скобках подсказку по произношению русскими буквами.
+Если на фото меню — можешь советовать блюда, объяснять состав, остроту, предупреждать об аллергенах.
+
+Никогда не описывай свои рассуждения, не пиши служебных пометок и не повторяй одну и ту же фразу.`;
 
 const DIALOG_SCHEMA = {
   type: 'OBJECT',
@@ -125,14 +143,19 @@ function friendly(status, message) {
   return message || `Ошибка сервера (HTTP ${status})`;
 }
 
-async function callModel(model, { system, parts, schema }) {
+async function callModel(model, { system, parts, contents, schema, maxTokens = 8192, temperature = 0.2 }) {
   const key = store.getKey();
   if (!key) throw new GeminiError('Не задан ключ Gemini. Добавьте его в Настройках.', 'nokey');
 
   const isGemma = model.startsWith('gemma');
-  const generationConfig = { responseMimeType: 'application/json' };
-  if (isGemma) generationConfig.responseJsonSchema = toStandardSchema(schema);
-  else generationConfig.responseSchema = schema;
+  // Потолок по токенам обязателен: без него сорвавшаяся в петлю модель генерирует,
+  // пока не упрётся в лимит контекста, и возвращает километр служебного мусора.
+  const generationConfig = { maxOutputTokens: maxTokens, temperature };
+  if (schema) {
+    generationConfig.responseMimeType = 'application/json';
+    if (isGemma) generationConfig.responseJsonSchema = toStandardSchema(schema);
+    else generationConfig.responseSchema = schema;
+  }
 
   if (!navigator.onLine) {
     throw new GeminiError('Нет интернета. Откройте «Готовые фразы» — они работают без сети.', 'offline');
@@ -145,7 +168,7 @@ async function callModel(model, { system, parts, schema }) {
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: system }] },
-        contents: [{ role: 'user', parts }],
+        contents: contents || [{ role: 'user', parts }],
         generationConfig,
       }),
     });
@@ -164,21 +187,32 @@ async function callModel(model, { system, parts, schema }) {
 
   const data = await res.json();
   const cand = data.candidates?.[0];
+  const reason = cand?.finishReason;
   const text = (cand?.content?.parts || []).map(p => p.text).filter(Boolean).join('');
   if (!text) {
-    const reason = cand?.finishReason;
     if (['SAFETY', 'RECITATION', 'PROHIBITED_CONTENT', 'BLOCKLIST'].includes(reason)) {
       throw new GeminiError('Gemini отказался отвечать: сработал фильтр контента.', 'blocked');
     }
+    if (reason === 'MAX_TOKENS') {
+      throw new GeminiError('На фото слишком много текста. Снимите его частями.', 'toolong');
+    }
     throw new GeminiError('Gemini вернул пустой ответ. Попробуйте ещё раз.', 'empty');
   }
+  if (!schema) return text;
   try { return JSON.parse(text); }
-  catch { throw new GeminiError('Не удалось разобрать ответ Gemini.', 'parse'); }
+  catch {
+    // Обрыв по лимиту токенов даёт синтаксически неполный JSON — это не «сломанный ответ»,
+    // а слишком длинный: сообщаем человеку то, что он может исправить.
+    if (reason === 'MAX_TOKENS') {
+      throw new GeminiError('На фото слишком много текста — ответ не поместился. Снимите его частями.', 'toolong');
+    }
+    throw new GeminiError('Не удалось разобрать ответ Gemini.', 'parse');
+  }
 }
 
 // Идём по цепочке: квота/перегрузка/закрытая модель — следующая. Прочие ошибки бросаем сразу.
 async function generate(opts) {
-  const hasAudio = opts.parts.some(p => p.inlineData?.mimeType?.startsWith('audio/'));
+  const hasAudio = (opts.parts || []).some(p => p.inlineData?.mimeType?.startsWith('audio/'));
   const chain = hasAudio ? CHAIN : [...CHAIN, LAST_RESORT];
   let lastErr = null;
 
@@ -202,6 +236,51 @@ async function generate(opts) {
     }
   }
   throw lastErr || new GeminiError('Не удалось получить ответ.', 'api');
+}
+
+// ------------------------------------------------- защита от сорвавшейся модели
+// Изредка модель срывается в петлю и вместо ответа выдаёт поток служебных фраз
+// («Clean JSON. Output now. Done. OK.») на сотни строк — прямо в поле summary.
+// Ловим по двум независимым признакам и чистим, чтобы человек не видел мусор.
+
+const SERVICE_RE = /\b(JSON|parseable|control (chars?|tokens?)|newlines?|schema|sanitize|escaped|emit(ting)?|output string|single line)\b/gi;
+
+function looksDegenerate(text) {
+  if (!text || text.length < 400) return false;
+  const words = text.toLowerCase().match(/\p{L}+/gu) || [];
+  if (words.length < 60) return false;
+  // Живой текст почти не повторяется, петля — наоборот: десяток слов на сотни повторов.
+  if (new Set(words).size / words.length < 0.32) return true;
+  return (text.match(SERVICE_RE) || []).length >= 5;
+}
+
+/// Оставляем человеческое начало, отрезая всё от первой служебной фразы.
+function trimToHuman(text) {
+  if (!text) return '';
+  const m = text.match(/(?:Do not |Let's |Strictly |Clean |Correct |Output |Emit |Check |Is formatting|JSON )/);
+  const head = m && m.index > 60 ? text.slice(0, m.index) : text;
+  return head.trim().replace(/[\s.,;:—-]+$/, '').slice(0, 900);
+}
+
+function repairPhotoResult(r) {
+  if (!r || typeof r !== 'object') return r;
+  if (looksDegenerate(r.summary)) {
+    log('summary выродился в петлю — обрезаю до осмысленной части');
+    r.summary = trimToHuman(r.summary);
+  }
+  if (Array.isArray(r.blocks)) {
+    r.blocks = r.blocks
+      .map(b => ({ ...b, translation: looksDegenerate(b.translation) ? trimToHuman(b.translation) : b.translation }))
+      .filter(b => (b.original || '').trim() || (b.translation || '').trim());
+  }
+  return r;
+}
+
+/// Ответ бесполезен, если после чистки не осталось ничего содержательного.
+function photoIsEmpty(r) {
+  const blocks = (r?.blocks || []).length;
+  const dishes = (r?.sections || []).reduce((n, sec) => n + (sec.items || []).length, 0);
+  return !blocks && !dishes && !(r?.summary || '').trim();
 }
 
 export const gemini = {
@@ -239,12 +318,44 @@ export const gemini = {
     return generate({ system: DIALOG_PROMPT, parts, schema: DIALOG_SCHEMA });
   },
 
-  translatePhoto(base64Jpeg) {
-    return generate({
+  /// Принимает одну или несколько картинок — все страницы разбираются как единое целое.
+  async translatePhoto(images) {
+    const list = Array.isArray(images) ? images : [images];
+    const opts = {
       system: PHOTO_PROMPT,
-      parts: [{ inlineData: { mimeType: 'image/jpeg', data: base64Jpeg } }],
+      parts: list.map(data => ({ inlineData: { mimeType: 'image/jpeg', data } })),
       schema: PHOTO_SCHEMA,
+    };
+    let r = repairPhotoResult(await generate(opts));
+    if (photoIsEmpty(r)) {
+      // Петля съела весь ответ: пробуем ещё раз, чуть подняв температуру ради другого пути генерации.
+      log('ответ оказался пустым после чистки — повторяю запрос');
+      r = repairPhotoResult(await generate({ ...opts, temperature: 0.5 }));
+    }
+    return r;
+  },
+
+  /// Свободный вопрос по уже загруженным фото. Ответ обычным текстом: без схемы
+  /// модель заметно устойчивее, а формат нам здесь и не нужен.
+  async askPhoto(images, chat) {
+    const recent = chat.slice(-10);
+    const imageParts = images.map(data => ({ inlineData: { mimeType: 'image/jpeg', data } }));
+    let attached = false;
+    const contents = recent.map(m => {
+      const parts = [];
+      if (!attached && m.role === 'user') { parts.push(...imageParts); attached = true; }
+      parts.push({ text: m.text });
+      return { role: m.role === 'model' ? 'model' : 'user', parts };
     });
+    const text = await generate({
+      system: PHOTO_CHAT_PROMPT,
+      contents,
+      parts: imageParts,
+      maxTokens: 1200,
+      temperature: 0.4,
+    });
+    const clean = looksDegenerate(text) ? trimToHuman(text) : text.trim();
+    return clean || 'Не получилось ответить. Попробуйте спросить иначе.';
   },
 };
 
