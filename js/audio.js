@@ -1,6 +1,6 @@
 // Аудио: микрофон (стрим для Live и запись фразы), проигрывание ответа модели, TTS.
 
-import { bytesToBase64, base64ToBytes, log } from './util.js?v=202608281751';
+import { bytesToBase64, base64ToBytes, log } from './util.js?v=202608281755';
 
 const IN_RATE = 16000;
 const OUT_RATE = 24000;
@@ -196,21 +196,52 @@ export class Player {
   }
 }
 
-/** Системная озвучка (для кнопки «🔊» и показа собеседнику). */
+/** Системная озвучка (для кнопки «🔊» и показа собеседнику).
+ *  Сообщает о начале и конце речи: в живом режиме микрофон обязан молчать,
+ *  пока говорит динамик, иначе модель слышит собственную озвучку. */
 export const speaker = {
+  onSpeakingChange: null,
+  speaking: false,
+
   speak(text, lang) {
-    if (!('speechSynthesis' in window)) return;
-    speechSynthesis.cancel();
+    if (!('speechSynthesis' in window) || !text) return;
+    this.stop();
     const u = new SpeechSynthesisUtterance(text);
     u.lang = lang;
     u.rate = 0.95;
     const voices = speechSynthesis.getVoices().filter(v => v.lang?.replace('_', '-').startsWith(lang.slice(0, 2)));
     const best = voices.find(v => /enhanced|premium|siri/i.test(v.name)) || voices[0];
     if (best) u.voice = best;
+    const done = () => this._set(false);
+    u.onstart = () => this._set(true);
+    u.onend = done;
+    u.onerror = done;
+    // Страховка: на iOS onend изредка не приходит, и микрофон остался бы
+    // заглушённым навсегда. ~14 знаков в секунду при rate 0.95, плюс запас.
+    clearTimeout(this._guard);
+    this._guard = setTimeout(done, 2000 + (text.length / 14) * 1000);
     speechSynthesis.speak(u);
   },
-  stop() { try { speechSynthesis.cancel(); } catch {} },
+
+  stop() {
+    clearTimeout(this._guard);
+    try { speechSynthesis.cancel(); } catch {}
+    this._set(false);
+  },
+
+  _set(v) {
+    if (this.speaking === v) return;
+    this.speaking = v;
+    this.onSpeakingChange?.(v);
+  },
 };
+
+// Голоса на iOS подгружаются лениво: без этого первая фраза читается
+// системным голосом по умолчанию, а не лучшим вьетнамским.
+if ('speechSynthesis' in window) {
+  speechSynthesis.getVoices();
+  speechSynthesis.addEventListener?.('voiceschanged', () => speechSynthesis.getVoices());
+}
 
 /** Сжатие фото перед отправкой: длинная сторона до maxSide, JPEG. */
 export function compressImage(file, maxSide = 1600, quality = 0.72) {

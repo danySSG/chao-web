@@ -1,15 +1,15 @@
 // Chào! — веб-версия. Диалог (живой перевод, запись, текст), фото, история, настройки.
 
-import { store } from './store.js?v=202608281751';
-import { gemini, LiveSession } from './gemini.js?v=202608281751';
-import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608281751';
-import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608281751';
-import { iconSVG, renderIcons } from './icons.js?v=202608281751';
-import { PHRASES } from './phrases.js?v=202608281751';
-import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202608281751';
+import { store } from './store.js?v=202608281755';
+import { gemini, LiveSession } from './gemini.js?v=202608281755';
+import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608281755';
+import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608281755';
+import { iconSVG, renderIcons } from './icons.js?v=202608281755';
+import { PHRASES } from './phrases.js?v=202608281755';
+import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202608281755';
 
 const $ = (id) => document.getElementById(id);
-const VERSION = '202608281751';
+const VERSION = '202608281755';
 
 let deferredInstall = null;
 addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredInstall = e; });
@@ -455,6 +455,7 @@ async function toggleLive() {
 
   player.reset();
   speaker.stop();
+  modelSpeaking = ttsSpeaking = false;
   mic.muted = false;
 
   live = new LiveSession({
@@ -503,10 +504,27 @@ function updateMicIndicator() {
   $('micLiveDot').classList.toggle('hidden', !(liveOn || recording));
 }
 
-function onModelSpeaking(speaking) {
-  mic.muted = speaking;
-  if (liveOn) showBanner(!speaking);
+// Микрофон должен молчать, пока звучит динамик — и когда переводит сама
+// модель (её аудио), и когда читает системный голос. Источников два,
+// поэтому состояние сводим в одном месте.
+let modelSpeaking = false;
+let ttsSpeaking = false;
+
+function refreshMicMute() {
+  const busySpeaking = modelSpeaking || ttsSpeaking;
+  mic.muted = busySpeaking;
+  if (liveOn) showBanner(!busySpeaking);
 }
+
+function onModelSpeaking(speaking) {
+  modelSpeaking = speaking;
+  refreshMicMute();
+}
+
+speaker.onSpeakingChange = (speaking) => {
+  ttsSpeaking = speaking;
+  refreshMicMute();
+};
 
 function handleLiveTurn(transcript, translation) {
   const text = translation.trim();
