@@ -1,15 +1,15 @@
 // Chào! — веб-версия. Диалог (живой перевод, запись, текст), фото, история, настройки.
 
-import { store } from './store.js?v=202608281630';
-import { gemini, LiveSession } from './gemini.js?v=202608281630';
-import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608281630';
-import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608281630';
-import { iconSVG, renderIcons } from './icons.js?v=202608281630';
-import { PHRASES } from './phrases.js?v=202608281630';
-import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202608281630';
+import { store } from './store.js?v=202608281639';
+import { gemini, LiveSession } from './gemini.js?v=202608281639';
+import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608281639';
+import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608281639';
+import { iconSVG, renderIcons } from './icons.js?v=202608281639';
+import { PHRASES } from './phrases.js?v=202608281639';
+import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202608281639';
 
 const $ = (id) => document.getElementById(id);
-const VERSION = '202608281630';
+const VERSION = '202608281639';
 
 let deferredInstall = null;
 addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredInstall = e; });
@@ -867,23 +867,34 @@ function renderPhoto() {
   if (photo.chat.length) box.lastElementChild.lastElementChild?.scrollIntoView({ block: 'nearest' });
 }
 
+/// Показываем всё, что разобралось, а не только «профильную» половину:
+/// у многостраничного меню обложка с адресом — уже документ, и её перевод
+/// попадает во фрагменты. Раньше он молча пропадал с экрана.
 function renderResultHTML(r, interactive) {
+  const dishes = (r.sections || []).reduce((n, sec) => n + (sec.items || []).length, 0);
   let html = '';
-  if (r.isMenu) {
+
+  if (dishes) {
     if (interactive) html += `<div class="hint-tap">Тапните блюда, чтобы собрать заказ</div>`;
     for (const section of r.sections || []) {
       if (section.title) html += `<div class="section-title">${escapeHtml(section.title.toUpperCase())}</div>`;
-      for (const dish of section.items || []) {
-        html += dishHTML(dish, interactive);
-      }
+      for (const dish of section.items || []) html += dishHTML(dish, interactive);
     }
-    if (!(r.sections || []).length) html += `<div class="error">Не удалось разобрать меню. Попробуйте снять ближе.</div>`;
-  } else {
-    if (r.summary) html += `<div class="summary-card"><h4>Суть</h4>${escapeHtml(r.summary)}</div>`;
+  }
+
+  if (r.summary) html += `<div class="summary-card"><h4>Суть</h4>${escapeHtml(r.summary)}</div>`;
+  if ((r.blocks || []).length) {
+    // Заголовок нужен только рядом с блюдами — иначе и так понятно, что это перевод.
+    if (dishes) html += `<div class="section-title">ОСТАЛЬНОЕ НА ФОТО</div>`;
     for (const b of r.blocks || []) {
       html += `<div class="block-card"><div class="orig">${escapeHtml(b.original)}</div>${escapeHtml(b.translation)}</div>`;
     }
-    if (!(r.blocks || []).length && !r.summary) html += `<div class="error">Текст не распознан.</div>`;
+  }
+
+  if (!html) {
+    html = r.isMenu
+      ? `<div class="error">Не удалось разобрать меню. Попробуйте снять ближе.</div>`
+      : `<div class="error">Текст не распознан.</div>`;
   }
   return html;
 }

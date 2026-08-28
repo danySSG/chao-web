@@ -1,8 +1,8 @@
 // Клиент Gemini: REST-цепочка с фолбэками + Live API по WebSocket.
 // Логика перенесена из нативной версии (Swift), протокол проверен в поле.
 
-import { store } from './store.js?v=202608281630';
-import { log } from './util.js?v=202608281630';
+import { store } from './store.js?v=202608281639';
+import { log } from './util.js?v=202608281639';
 
 const REST_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 const WS_URL = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
@@ -164,15 +164,15 @@ function friendly(status, message) {
   return message || `Ошибка сервера (HTTP ${status})`;
 }
 
-async function callModel(model, { system, parts, contents, schema, maxTokens = 32768, temperature = 0.2, thinking = 'low' }) {
+async function callModel(model, { system, parts, contents, schema, maxTokens = 12288, temperature = 0.2, thinking = 'low' }) {
   const key = store.getKey();
   if (!key) throw new GeminiError('Не задан ключ Gemini. Добавьте его в Настройках.', 'nokey');
 
   const isGemma = model.startsWith('gemma');
-  // Потолок по токенам обязателен: без него сорвавшаяся в петлю модель генерирует,
-  // пока не упрётся в лимит контекста, и возвращает километр служебного мусора.
-  // Держим его высоким: в этот же бюджет входят «размышления» модели
-  // (thoughtsTokenCount), и на длинном меню они съедают больше, чем сам ответ.
+  // Потолок по токенам обязателен: без него сорвавшаяся модель генерирует, пока
+  // не упрётся в лимит контекста. Но и запас должен быть скромным: замеры дают
+  // 1–2 тысячи токенов на страницу, а лишний простор при срыве оборачивается
+  // минутами ожидания — модель молотит его весь, прежде чем вернуть ошибку.
   const generationConfig = { maxOutputTokens: maxTokens, temperature };
   // Без ограничения модель уходит в размышления на десятки тысяч токенов
   // (мелкий текст на фото провоцирует это надёжно) — минута ожидания и обрыв
@@ -407,9 +407,17 @@ export const gemini = {
 Разбирай ТОЛЬКО то, что видно на этой странице, ничего не повторяй с прошлых.` });
     }
     const opts = { system: PHOTO_PROMPT, parts, schema: PHOTO_SCHEMA };
-    let r = repairPhotoResult(await generate(opts));
+    let r;
+    try {
+      r = repairPhotoResult(await generate(opts));
+    } catch (e) {
+      // Обрыв по потолку — это сорвавшаяся модель, а не «сложное фото»:
+      // повтор с другой температурой почти всегда проходит нормально.
+      if (e.kind !== 'toolong') throw e;
+      log('модель сорвалась в рассуждения — повторяю запрос');
+      r = repairPhotoResult(await generate({ ...opts, temperature: 0.5 }));
+    }
     if (photoIsEmpty(r)) {
-      // Петля съела весь ответ: пробуем ещё раз, чуть подняв температуру ради другого пути генерации.
       log('ответ оказался пустым после чистки — повторяю запрос');
       r = repairPhotoResult(await generate({ ...opts, temperature: 0.5 }));
     }
