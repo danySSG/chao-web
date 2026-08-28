@@ -1,15 +1,15 @@
 // Chào! — веб-версия. Диалог (живой перевод, запись, текст), фото, история, настройки.
 
-import { store } from './store.js?v=202608281527';
-import { gemini, LiveSession } from './gemini.js?v=202608281527';
-import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608281527';
-import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608281527';
-import { iconSVG, renderIcons } from './icons.js?v=202608281527';
-import { PHRASES } from './phrases.js?v=202608281527';
-import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202608281527';
+import { store } from './store.js?v=202608281532';
+import { gemini, LiveSession } from './gemini.js?v=202608281532';
+import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608281532';
+import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608281532';
+import { iconSVG, renderIcons } from './icons.js?v=202608281532';
+import { PHRASES } from './phrases.js?v=202608281532';
+import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202608281532';
 
 const $ = (id) => document.getElementById(id);
-const VERSION = '202608281527';
+const VERSION = '202608281532';
 
 let deferredInstall = null;
 addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredInstall = e; });

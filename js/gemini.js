@@ -1,8 +1,8 @@
 // Клиент Gemini: REST-цепочка с фолбэками + Live API по WebSocket.
 // Логика перенесена из нативной версии (Swift), протокол проверен в поле.
 
-import { store } from './store.js?v=202608281527';
-import { log } from './util.js?v=202608281527';
+import { store } from './store.js?v=202608281532';
+import { log } from './util.js?v=202608281532';
 
 const REST_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 const WS_URL = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
@@ -143,13 +143,15 @@ function friendly(status, message) {
   return message || `Ошибка сервера (HTTP ${status})`;
 }
 
-async function callModel(model, { system, parts, contents, schema, maxTokens = 8192, temperature = 0.2 }) {
+async function callModel(model, { system, parts, contents, schema, maxTokens = 32768, temperature = 0.2 }) {
   const key = store.getKey();
   if (!key) throw new GeminiError('Не задан ключ Gemini. Добавьте его в Настройках.', 'nokey');
 
   const isGemma = model.startsWith('gemma');
   // Потолок по токенам обязателен: без него сорвавшаяся в петлю модель генерирует,
   // пока не упрётся в лимит контекста, и возвращает километр служебного мусора.
+  // Держим его высоким: в этот же бюджет входят «размышления» модели
+  // (thoughtsTokenCount), и на длинном меню они съедают больше, чем сам ответ.
   const generationConfig = { maxOutputTokens: maxTokens, temperature };
   if (schema) {
     generationConfig.responseMimeType = 'application/json';
@@ -351,7 +353,7 @@ export const gemini = {
       system: PHOTO_CHAT_PROMPT,
       contents,
       parts: imageParts,
-      maxTokens: 1200,
+      maxTokens: 8192,
       temperature: 0.4,
     });
     const clean = looksDegenerate(text) ? trimToHuman(text) : text.trim();
