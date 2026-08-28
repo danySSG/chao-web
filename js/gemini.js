@@ -1,8 +1,8 @@
 // Клиент Gemini: REST-цепочка с фолбэками + Live API по WebSocket.
 // Логика перенесена из нативной версии (Swift), протокол проверен в поле.
 
-import { store } from './store.js?v=202608281730';
-import { log } from './util.js?v=202608281730';
+import { store } from './store.js?v=202608281736';
+import { log } from './util.js?v=202608281736';
 
 const REST_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 const WS_URL = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
@@ -216,9 +216,9 @@ export class GeminiError extends Error {
   constructor(message, kind) { super(message); this.kind = kind; }
 }
 
-function friendly(status, message) {
+function friendly(status, message, quotaId = '') {
   if (status === 429) {
-    return /PerDay|per day/i.test(message || '')
+    return /PerDay/i.test(quotaId) || /PerDay|per day/i.test(message || '')
       // «Без лимита» было бы преувеличением: у Live своя квота — около шести
       // ОДНОВРЕМЕННЫХ сессий, а не число запросов. Одному человеку она недостижима,
       // и текстовые лимиты её не касаются — это и говорим.
@@ -271,8 +271,12 @@ async function callModel(model, { system, parts, contents, schema, maxTokens = 1
   }
 
   if (!res.ok) {
-    let msg = '';
-    try { msg = (await res.json())?.error?.message || ''; } catch {}
+    let msg = '', apiError = null;
+    try { apiError = (await res.json())?.error || null; msg = apiError?.message || ''; } catch {}
+    // Тип квоты (PerDay/PerMinute) лежит в error.details, а НЕ в message —
+    // по одному message дневной лимит неотличим от минутного, и приложение
+    // штурмовало исчерпанную модель раз в минуту вместо раза в четверть часа.
+    const quotaId = JSON.stringify(apiError?.details || []).match(/"quotaId":"([^"]+)"/)?.[1] || '';
     if (res.status === 503 || /high demand|overloaded/i.test(msg)) {
       // Перегруженная модель отвечает отказом за пару секунд — но на каждом
       // запросе. Пара минут паузы дешевле, чем этот налог на всю цепочку.
@@ -280,12 +284,12 @@ async function callModel(model, { system, parts, contents, schema, maxTokens = 1
       log(`${model}: перегружена, пропускаю 3 мин`);
     }
     if (res.status === 429) {
-      const isDaily = /PerDay/i.test(msg) || /per day/i.test(msg);
+      const isDaily = /PerDay/i.test(quotaId) || /PerDay|per day/i.test(msg);
       const pause = retryPause(msg, isDaily);
       markOutOfQuota(model, pause);
       log(`${model}: лимит ${isDaily ? 'на сутки' : 'на минуту'}, пропускаю ${Math.round(pause / 1000)} с`);
     }
-    const err = new GeminiError(friendly(res.status, msg), res.status === 429 ? 'quota' : 'api');
+    const err = new GeminiError(friendly(res.status, msg, quotaId), res.status === 429 ? 'quota' : 'api');
     err.status = res.status;
     err.raw = msg;
     throw err;
