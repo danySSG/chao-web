@@ -10,7 +10,7 @@
 <meta name="theme-color" content="#F0532E">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon.png">
-<link rel="stylesheet" href="css/style.css?v=202608281605">
+<link rel="stylesheet" href="css/style.css?v=202608281615">
 <title>Chào! — переводчик</title>
 <meta name="description" content="Живой перевод русский ↔ вьетнамский: говорите голосом, фотографируйте меню и документы. Бесплатно, работает в браузере.">
 <!-- Карточка при отправке ссылки в мессенджерах -->
@@ -132,9 +132,9 @@
   <!-- ФОТО -->
   <section class="screen hidden" id="tab-photo">
     <header class="bar">
-      <span class="icon-btn ghost-slot" aria-hidden="true"></span>
+      <button class="icon-btn" id="photoHistBtn" title="История"><span data-icon="history" data-icon-size="21"></span></button>
       <h2>Фото</h2>
-      <span id="photoResetWrap" class="hidden"><button class="icon-btn" id="photoReset" title="Начать заново"><span data-icon="trash" data-icon-size="19"></span></button></span>
+      <span id="photoResetWrap" class="hidden"><button class="icon-btn" id="photoReset" title="Новый снимок"><span data-icon="edit" data-icon-size="20"></span></button></span>
     </header>
     <div class="content" id="photoContent">
       <input type="file" id="fileCamera" accept="image/*" capture="environment" hidden>
@@ -253,6 +253,6 @@
 
 <div id="toast" class="toast hidden"></div>
 
-<script type="module" src="js/app.js?v=202608281605"></script>
+<script type="module" src="js/app.js?v=202608281615"></script>
 </body>
 </html>

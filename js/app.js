@@ -1,15 +1,15 @@
 // Chào! — веб-версия. Диалог (живой перевод, запись, текст), фото, история, настройки.
 
-import { store } from './store.js?v=202608281605';
-import { gemini, LiveSession } from './gemini.js?v=202608281605';
-import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608281605';
-import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608281605';
-import { iconSVG, renderIcons } from './icons.js?v=202608281605';
-import { PHRASES } from './phrases.js?v=202608281605';
-import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202608281605';
+import { store } from './store.js?v=202608281615';
+import { gemini, LiveSession } from './gemini.js?v=202608281615';
+import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608281615';
+import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608281615';
+import { iconSVG, renderIcons } from './icons.js?v=202608281615';
+import { PHRASES } from './phrases.js?v=202608281615';
+import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202608281615';
 
 const $ = (id) => document.getElementById(id);
-const VERSION = '202608281605';
+const VERSION = '202608281615';
 
 let deferredInstall = null;
 addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredInstall = e; });
@@ -75,7 +75,8 @@ function boot() {
   $('photoAsk').addEventListener('keydown', (e) => { if (e.key === 'Enter') askAboutPhoto(); });
   $('photoAsk').addEventListener('input', updatePhotoBar);
   $('photoSend').addEventListener('click', askAboutPhoto);
-  $('photoReset').addEventListener('click', resetPhoto);
+  $('photoReset').addEventListener('click', () => resetPhoto(true));
+  $('photoHistBtn').addEventListener('click', () => openHistory('menus'));
 
   // история
   $('histClose').addEventListener('click', () => $('history').classList.add('hidden'));
@@ -674,10 +675,14 @@ function removePhotoAt(index) {
   else resetPhoto();
 }
 
-function resetPhoto() {
+/// Кнопка в шапке работает как «карандаш» в диалоге: начинает новое,
+/// а разобранное остаётся в истории — об этом и говорит подсказка.
+function resetPhoto(announce) {
+  const saved = announce && photo.historyId;
   photo = { images: [], result: null, order: new Map(), chat: [], asking: false, analyzing: false, error: null, historyId: null };
   $('photoAsk').value = '';
   renderPhoto();
+  if (saved) toast('Снимок сохранён в историю');
 }
 
 async function savePhotoToHistory(dataUrl, result) {
