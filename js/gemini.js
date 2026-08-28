@@ -1,8 +1,8 @@
 // Клиент Gemini: REST-цепочка с фолбэками + Live API по WebSocket.
 // Логика перенесена из нативной версии (Swift), протокол проверен в поле.
 
-import { store } from './store.js?v=202608281659';
-import { log } from './util.js?v=202608281659';
+import { store } from './store.js?v=202608281707';
+import { log } from './util.js?v=202608281707';
 
 const REST_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 const WS_URL = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
@@ -213,8 +213,11 @@ export class GeminiError extends Error {
 function friendly(status, message) {
   if (status === 429) {
     return /PerDay|per day/i.test(message || '')
-      ? 'Дневной лимит бесплатных запросов исчерпан. Живой перевод (кнопка-волна) работает без лимита.'
-      : 'Слишком много запросов подряд. Подождите минуту — или говорите через живой перевод, он без лимита.';
+      // «Без лимита» было бы преувеличением: у Live своя квота — около шести
+      // ОДНОВРЕМЕННЫХ сессий, а не число запросов. Одному человеку она недостижима,
+      // и текстовые лимиты её не касаются — это и говорим.
+      ? 'Дневной лимит текстовых запросов исчерпан. Живой перевод (кнопка-волна) считается отдельно и работает.'
+      : 'Слишком много запросов подряд. Подождите минуту — или говорите через живой перевод, его это не касается.';
   }
   if (status === 401 || status === 403 || /api key/i.test(message)) {
     return 'Ключ не подошёл. Проверьте его в Настройках — если ключ старый, перевыпустите на aistudio.google.com.';
