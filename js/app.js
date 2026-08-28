@@ -1,15 +1,15 @@
 // Chào! — веб-версия. Диалог (живой перевод, запись, текст), фото, история, настройки.
 
-import { store } from './store.js?v=202608281546';
-import { gemini, LiveSession } from './gemini.js?v=202608281546';
-import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608281546';
-import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608281546';
-import { iconSVG, renderIcons } from './icons.js?v=202608281546';
-import { PHRASES } from './phrases.js?v=202608281546';
-import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202608281546';
+import { store } from './store.js?v=202608281549';
+import { gemini, LiveSession } from './gemini.js?v=202608281549';
+import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608281549';
+import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608281549';
+import { iconSVG, renderIcons } from './icons.js?v=202608281549';
+import { PHRASES } from './phrases.js?v=202608281549';
+import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202608281549';
 
 const $ = (id) => document.getElementById(id);
-const VERSION = '202608281546';
+const VERSION = '202608281549';
 
 let deferredInstall = null;
 addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredInstall = e; });
@@ -644,13 +644,20 @@ async function analyzePhotos() {
   renderPhoto();
   try {
     photo.result = await gemini.translatePhoto(photo.images.map(i => i.base64));
-    // Перечитали набор заново — отметки на блюдах, которых в новом разборе нет,
-    // иначе остались бы фантомами и завышали счётчик в кнопке заказа.
-    const alive = new Set();
+    // Набор перечитан целиком, ключи блюд сменились — переносим собранный заказ
+    // по вьетнамскому названию: оно между разборами стабильно, а русский перевод
+    // модель каждый раз формулирует чуть иначе. Отметки блюд, которых в новом
+    // разборе нет, отпадают сами — иначе они завышали бы счётчик как фантомы.
+    const byOriginal = new Map();
+    for (const [key, n] of photo.order) byOriginal.set(key.split('|')[0], n);
+    const moved = new Map();
     for (const sec of photo.result.sections || []) {
-      for (const dish of sec.items || []) alive.add(dish.original + '|' + dish.translation);
+      for (const dish of sec.items || []) {
+        const n = byOriginal.get(dish.original);
+        if (n) moved.set(dish.original + '|' + dish.translation, n);
+      }
     }
-    for (const key of [...photo.order.keys()]) if (!alive.has(key)) photo.order.delete(key);
+    photo.order = moved;
     savePhotoToHistory(photo.images[0].dataUrl, photo.result);
   } catch (e) {
     log(`фото: ${e.message}`);
