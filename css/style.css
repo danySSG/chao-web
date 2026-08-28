@@ -226,6 +226,23 @@ input:focus { outline: none; border-color: var(--accent); }
 .retry { width: 100%; margin-top: 10px; }
 .pick-note { text-align: center; font-size: 12px; color: var(--muted); margin-top: -3px; }
 
+/* Объяснение двух голосовых режимов на пустом экране диалога */
+.modes { display: grid; gap: 10px; margin-top: 16px; text-align: left; }
+.mode {
+  display: grid; grid-template-columns: 34px 1fr; gap: 10px 11px; align-items: start;
+  background: var(--card); border-radius: 16px; padding: 13px 14px;
+  font-size: 13px; line-height: 1.45; color: var(--muted);
+}
+.mode b { grid-column: 2; font-size: 14px; color: var(--fg); margin-bottom: 2px; }
+.mode-ico { grid-row: span 2; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; }
+.mode-ico.mic { background: linear-gradient(180deg, var(--accent), var(--accent-2)); }
+.mode-ico.mic svg { color: #fff; }
+.mode-ico.wave { background: var(--accent-soft); }
+.mode-ico.wave svg { color: var(--accent); }
+.howto p { font-size: 13.5px; line-height: 1.5; color: var(--muted); margin: 9px 0 0; }
+.howto b { color: var(--fg); }
+.howto .hl { color: var(--accent); font-weight: 700; }
+
 /* Вопросы по фото */
 .qa { margin-top: 18px; display: grid; gap: 9px; }
 .qa-hint {

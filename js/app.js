@@ -1,15 +1,15 @@
 // Chào! — веб-версия. Диалог (живой перевод, запись, текст), фото, история, настройки.
 
-import { store } from './store.js?v=202608281716';
-import { gemini, LiveSession } from './gemini.js?v=202608281716';
-import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608281716';
-import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608281716';
-import { iconSVG, renderIcons } from './icons.js?v=202608281716';
-import { PHRASES } from './phrases.js?v=202608281716';
-import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202608281716';
+import { store } from './store.js?v=202608281720';
+import { gemini, LiveSession } from './gemini.js?v=202608281720';
+import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608281720';
+import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608281720';
+import { iconSVG, renderIcons } from './icons.js?v=202608281720';
+import { PHRASES } from './phrases.js?v=202608281720';
+import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202608281720';
 
 const $ = (id) => document.getElementById(id);
-const VERSION = '202608281716';
+const VERSION = '202608281720';
 
 let deferredInstall = null;
 addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredInstall = e; });
@@ -361,7 +361,12 @@ function renderFeed() {
     feed.innerHTML = `<div class="empty">
       <div class="empty-icon">${iconSVG('chat', 52)}</div><h3>Chào!</h3>
       <p>Скажите фразу по-русски — озвучу её по-вьетнамски. Собеседник ответит в микрофон — вы прочтёте по-русски.</p>
-      <div class="chip">Волна — живой перевод без пауз</div>
+      <div class="modes">
+        <div class="mode"><span class="mode-ico mic">${iconSVG('mic', 19)}</span>
+          <b>Микрофон — по очереди</b>Нажали, сказали фразу, нажали ещё раз. Перевод придёт следом. Годится, когда шумно или нужна одна фраза.</div>
+        <div class="mode"><span class="mode-ico wave">${iconSVG('wave', 19)}</span>
+          <b>Волна — живой разговор</b>Включили один раз и говорите по очереди с собеседником: переводит на лету, нажимать между репликами не нужно.</div>
+      </div>
       <div class="quick" id="quickPhrases"></div></div>`;
     const quick = [
       ['Здравствуйте', 'Xin chào'],
