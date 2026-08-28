@@ -1,15 +1,15 @@
 // Chào! — веб-версия. Диалог (живой перевод, запись, текст), фото, история, настройки.
 
-import { store } from './store.js?v=202608281536';
-import { gemini, LiveSession } from './gemini.js?v=202608281536';
-import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608281536';
-import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608281536';
-import { iconSVG, renderIcons } from './icons.js?v=202608281536';
-import { PHRASES } from './phrases.js?v=202608281536';
-import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202608281536';
+import { store } from './store.js?v=202608281546';
+import { gemini, LiveSession } from './gemini.js?v=202608281546';
+import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608281546';
+import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608281546';
+import { iconSVG, renderIcons } from './icons.js?v=202608281546';
+import { PHRASES } from './phrases.js?v=202608281546';
+import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202608281546';
 
 const $ = (id) => document.getElementById(id);
-const VERSION = '202608281536';
+const VERSION = '202608281546';
 
 let deferredInstall = null;
 addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredInstall = e; });
@@ -25,7 +25,7 @@ let messages = store.getCurrent();
 
 // Текущие фото: images — страницы одного меню/документа, chat — вопросы по ним
 const MAX_PHOTOS = 6;
-let photo = { images: [], result: null, order: new Map(), chat: [], asking: false, analyzing: false, error: null };
+let photo = { images: [], result: null, order: new Map(), chat: [], asking: false, analyzing: false, error: null, historyId: null };
 
 // ------------------------------------------------------------------ запуск
 
@@ -644,6 +644,13 @@ async function analyzePhotos() {
   renderPhoto();
   try {
     photo.result = await gemini.translatePhoto(photo.images.map(i => i.base64));
+    // Перечитали набор заново — отметки на блюдах, которых в новом разборе нет,
+    // иначе остались бы фантомами и завышали счётчик в кнопке заказа.
+    const alive = new Set();
+    for (const sec of photo.result.sections || []) {
+      for (const dish of sec.items || []) alive.add(dish.original + '|' + dish.translation);
+    }
+    for (const key of [...photo.order.keys()]) if (!alive.has(key)) photo.order.delete(key);
     savePhotoToHistory(photo.images[0].dataUrl, photo.result);
   } catch (e) {
     log(`фото: ${e.message}`);
@@ -661,7 +668,7 @@ function removePhotoAt(index) {
 }
 
 function resetPhoto() {
-  photo = { images: [], result: null, order: new Map(), chat: [], asking: false, analyzing: false, error: null };
+  photo = { images: [], result: null, order: new Map(), chat: [], asking: false, analyzing: false, error: null, historyId: null };
   $('photoAsk').value = '';
   renderPhoto();
 }
@@ -671,7 +678,11 @@ async function savePhotoToHistory(dataUrl, result) {
     // Для истории — маленькое превью, чтобы не выесть хранилище.
     const blob = await (await fetch(dataUrl)).blob();
     const { dataUrl: thumb } = await compressImage(blob, 420, 0.55);
-    store.addPhoto({ id: crypto.randomUUID(), ts: Date.now(), thumb, result });
+    // Добавленная страница запускает разбор заново: заменяем прежнюю запись,
+    // иначе одно меню копится в истории по разу на каждую страницу.
+    if (photo.historyId) store.removePhoto(photo.historyId);
+    photo.historyId = crypto.randomUUID();
+    store.addPhoto({ id: photo.historyId, ts: Date.now(), thumb, result });
   } catch {}
 }
 
