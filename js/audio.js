@@ -1,6 +1,6 @@
 // Аудио: микрофон (стрим для Live и запись фразы), проигрывание ответа модели, TTS.
 
-import { bytesToBase64, base64ToBytes, log } from './util.js?v=202608281743';
+import { bytesToBase64, base64ToBytes, log } from './util.js?v=202608281751';
 
 const IN_RATE = 16000;
 const OUT_RATE = 24000;
@@ -128,6 +128,7 @@ export class Player {
     this.speaking = false;
     this.unmuteTimer = null;
     this.generation = 0;
+    this.sources = new Set();   // запущенные куски — их нужно уметь оборвать
   }
 
   enqueue(base64) {
@@ -151,17 +152,26 @@ export class Player {
 
     const gen = this.generation;
     this.pending++;
+    this.sources.add(src);
     this._setSpeaking(true);
     src.onended = () => {
+      this.sources.delete(src);
       if (gen !== this.generation) return;
       this.pending = Math.max(0, this.pending - 1);
       if (this.pending === 0) this._scheduleUnmute();
     };
   }
 
-  /** Собеседник перебил модель — выбрасываем недоигранный хвост. */
+  /** Собеседник перебил модель — выбрасываем недоигранный хвост.
+   *  Счётчиков мало: запущенный AudioBufferSourceNode доиграет буфер до конца,
+   *  сколько бы флагов мы ни сбросили, — его нужно именно остановить, иначе
+   *  прежний перевод звучит поверх нового. */
   flush() {
     this.generation++;
+    for (const src of this.sources) {
+      try { src.onended = null; src.stop(); } catch {}
+    }
+    this.sources.clear();
     this.pending = 0;
     this.head = ctx ? ctx.currentTime : 0;
     this._setSpeaking(false);

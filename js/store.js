@@ -38,7 +38,24 @@ export const store = {
 
   // --- текущий диалог
   getCurrent() { return read(K_CURRENT, []); },
-  setCurrent(messages) { write(K_CURRENT, messages.slice(-MAX_CURRENT)); },
+  /// Разговор дороже кэша и старых снимков: если места не хватило, сначала
+  /// выбрасываем восстановимое, и только в крайнем случае режем сам диалог.
+  setCurrent(messages) {
+    let list = messages.slice(-MAX_CURRENT);
+    if (write(K_CURRENT, list)) return true;
+    localStorage.removeItem(K_TRCACHE);
+    if (write(K_CURRENT, list)) return true;
+    const photos = read(K_PHOTOS, []);
+    for (let keep = photos.length - 1; keep >= 0; keep--) {
+      write(K_PHOTOS, photos.slice(0, keep));
+      if (write(K_CURRENT, list)) return true;
+    }
+    while (list.length > 10) {
+      list = list.slice(Math.ceil(list.length / 2));
+      if (write(K_CURRENT, list)) return true;
+    }
+    return false;
+  },
 
   // --- архив диалогов
   getSessions() { return read(K_SESSIONS, []); },
@@ -47,8 +64,16 @@ export const store = {
     if (!msgs.length) return;
     const sessions = this.getSessions();
     sessions.unshift({ id: crypto.randomUUID(), startedAt: msgs[0].ts || Date.now(), messages: msgs });
-    write(K_SESSIONS, sessions.slice(0, MAX_SESSIONS));
-    this.setCurrent([]);
+    // Текущий диалог очищаем ТОЛЬКО после того, как архив реально записан:
+    // иначе при переполнении хранилища разговор исчезал бы безвозвратно.
+    let list = sessions.slice(0, MAX_SESSIONS);
+    let saved = write(K_SESSIONS, list);
+    while (!saved && list.length > 1) {
+      list = list.slice(0, list.length - 1);   // вытесняем самые старые сессии
+      saved = write(K_SESSIONS, list);
+    }
+    if (saved) this.setCurrent([]);
+    return saved;
   },
   removeSession(id) {
     write(K_SESSIONS, this.getSessions().filter(s => s.id !== id));
@@ -99,6 +124,10 @@ export const store = {
     return Math.round(total / 1024);
   },
   wipe() {
-    [K_KEY, K_CURRENT, K_SESSIONS, K_PHOTOS, K_TRCACHE].forEach(k => localStorage.removeItem(k));
+    // Включая служебное: метки исчерпанных квот и выбор живой модели —
+    // кнопка обещает «удалить всё», значит и следов остаться не должно.
+    for (const k of Object.keys(localStorage)) {
+      if (k.startsWith('chao.')) localStorage.removeItem(k);
+    }
   },
 };

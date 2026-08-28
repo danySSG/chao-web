@@ -1,15 +1,15 @@
 // Chào! — веб-версия. Диалог (живой перевод, запись, текст), фото, история, настройки.
 
-import { store } from './store.js?v=202608281743';
-import { gemini, LiveSession } from './gemini.js?v=202608281743';
-import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608281743';
-import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608281743';
-import { iconSVG, renderIcons } from './icons.js?v=202608281743';
-import { PHRASES } from './phrases.js?v=202608281743';
-import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202608281743';
+import { store } from './store.js?v=202608281751';
+import { gemini, LiveSession } from './gemini.js?v=202608281751';
+import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608281751';
+import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608281751';
+import { iconSVG, renderIcons } from './icons.js?v=202608281751';
+import { PHRASES } from './phrases.js?v=202608281751';
+import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202608281751';
 
 const $ = (id) => document.getElementById(id);
-const VERSION = '202608281743';
+const VERSION = '202608281751';
 
 let deferredInstall = null;
 addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredInstall = e; });
@@ -474,6 +474,7 @@ async function toggleLive() {
   mic.onChunk = (b64) => live?.sendAudio(b64);
 
   liveOn = true;
+  updateMicIndicator();
   haptic([10, 40, 10]);
   $('liveBtn').disabled = false;
   $('liveBtn').classList.add('on');
@@ -482,6 +483,7 @@ async function toggleLive() {
 
 function stopLive() {
   liveOn = false;
+  updateMicIndicator();
   live?.stop();
   live = null;
   mic.onChunk = null;
@@ -493,6 +495,12 @@ function stopLive() {
   $('micBtn').disabled = false;
   showBanner(false);
   setStatus('');
+}
+
+/// Микрофон может слушать, когда открыта другая вкладка: статусная строка живёт
+/// в диалоге и там не видна. Точка на кнопке «Диалог» показывает это всегда.
+function updateMicIndicator() {
+  $('micLiveDot').classList.toggle('hidden', !(liveOn || recording));
 }
 
 function onModelSpeaking(speaking) {
@@ -536,6 +544,7 @@ async function toggleRecording() {
   if (recording) {
     haptic(14);
     recording = false;
+    updateMicIndicator();
     $('micBtn').classList.remove('rec');
     $('micBtn').innerHTML = iconSVG('mic', 25);
     showBanner(false);
@@ -555,6 +564,7 @@ async function toggleRecording() {
   mic.startRecording();
   haptic(14);
   recording = true;
+  updateMicIndicator();
   $('micBtn').classList.add('rec');
   $('micBtn').innerHTML = iconSVG('stop', 24);
   showBanner(true, true);
@@ -564,6 +574,7 @@ async function toggleRecording() {
 function cancelRecording() {
   if (!recording) return;
   recording = false;
+  updateMicIndicator();
   mic.stopRecording();
   mic.stop();
   $('micBtn').classList.remove('rec');
@@ -603,7 +614,7 @@ async function translateAndAdd(fn) {
     showTyping(false);
     busy = false;
     $('sendBtn').disabled = false;
-    $('micBtn').disabled = false;
+    $('micBtn').disabled = liveOn;   // в живом режиме запись всё равно недоступна
   }
 }
 

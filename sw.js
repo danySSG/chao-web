@@ -1,7 +1,7 @@
 // Service worker: приложение открывается и работает без сети.
 // Оболочка (страница, стили, скрипты, иконка) живёт в кэше; запросы к Gemini
 // и проверка версии всегда идут в сеть.
-const VERSION = '202608281743';
+const VERSION = '202608281751';
 const CACHE = `chao-${VERSION}`;
 const SHELL = [
   './',
@@ -14,6 +14,7 @@ const SHELL = [
   './js/util.js',
   './js/icons.js',
   './js/phrases.js',
+  './js/illustrations.js',
   './icon.png',
   './manifest.json',
 ];
@@ -23,8 +24,10 @@ self.addEventListener('install', (e) => {
     const cache = await caches.open(CACHE);
     // Версионированные адреса модулей — кэшируем их же, иначе офлайн не соберётся
     const versioned = SHELL.map(p => (p.endsWith('.js') || p.endsWith('.css')) ? `${p}?v=${VERSION}` : p);
-    await cache.addAll([...SHELL, ...versioned].map(u => new Request(u, { cache: 'reload' })))
-      .catch(() => {}); // офлайн-установка не должна валить SW целиком
+    // По одному, а не addAll: тот падает целиком из-за единственного файла,
+    // и тогда офлайн-оболочки не остаётся вовсе — причём молча.
+    await Promise.all([...SHELL, ...versioned].map(u =>
+      cache.add(new Request(u, { cache: 'reload' })).catch(() => {})));
     self.skipWaiting();
   })());
 });
