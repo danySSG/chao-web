@@ -34,7 +34,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 .hidden { display: none !important; }
-button, input { font-family: inherit; font-size: 16px; }
+button, input, select { font-family: inherit; font-size: 16px; }
 button { cursor: pointer; border: 0; background: none; color: inherit; }
 
 /* Экраны */
@@ -110,7 +110,12 @@ input[type="password"], input[type="text"] {
   width: 100%; padding: 14px; border-radius: var(--radius);
   border: 1px solid transparent; background: var(--card); color: var(--fg);
 }
-input:focus { outline: none; border-color: var(--accent); }
+input:focus, select:focus { outline: none; border-color: var(--accent); }
+select {
+  width: 100%; padding: 12px 14px; border-radius: 14px;
+  background: var(--bg); border: 1.5px solid var(--card-2); color: var(--fg);
+}
+.card .hint { font-size: 12.5px; line-height: 1.45; color: var(--muted); margin: 9px 0 0; }
 
 /* Лента диалога */
 .msg { max-width: 86%; padding: 12px 15px; border-radius: 22px; margin-bottom: 11px; }

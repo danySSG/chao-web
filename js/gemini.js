@@ -1,13 +1,18 @@
 // Клиент Gemini: REST-цепочка с фолбэками + Live API по WebSocket.
 // Логика перенесена из нативной версии (Swift), протокол проверен в поле.
 
-import { store } from './store.js?v=202608281720';
-import { log } from './util.js?v=202608281720';
+import { store } from './store.js?v=202608281730';
+import { log } from './util.js?v=202608281730';
 
 const REST_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 const WS_URL = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
 
 export const LIVE_MODEL = 'models/gemini-3.1-flash-live-preview';
+// Экспериментальная альтернатива: специализирована на речевом переводе, квота
+// без дневного лимита. Принимает ТОЛЬКО речь (на текстовый ввод молчит), поэтому
+// оценить её можно лишь в живом разговоре — отсюда переключатель в настройках.
+export const LIVE_MODEL_ALT = 'models/gemini-3.5-live-translate-preview';
+function liveModel() { return store.getLiveModel() || LIVE_MODEL; }
 
 // Цепочки разные, потому что задачи разные (замеры 28.08.2026 на одном наборе):
 //
@@ -548,7 +553,7 @@ const MAX_TURNS_PER_SESSION = 15;
 
 export class LiveSession {
   constructor(handlers) {
-    this.h = handlers;               // { onTurn, onAudio, onInterrupted, onState, onError }
+    this.h = handlers;               // { onTurn, onAudio, onInterrupted, onState, onError, getContext }
     this.ws = null;
     this.shouldRun = false;
     this.turnIn = '';
@@ -585,6 +590,26 @@ export class LiveSession {
 
   _resetTurn() { this.turnIn = ''; this.turnOut = ''; }
 
+  /// Свежая сессия ничего не знает о том, что уже сказано — ни о репликах из
+  /// текстового режима, ни о том, что было до планового обновления. Отдаём ей
+  /// последние реплики как готовые пары «оригинал → перевод»: с turnComplete:false
+  /// модель принимает их молча, не пытаясь перевести заново (проверено).
+  _sendContext() {
+    const history = this.h.getContext?.() || [];
+    if (!history.length || !this.ready) return;
+    const turns = [];
+    for (const m of history) {
+      const said = (m.transcript || '').trim();
+      const translated = (m.translation || '').trim();
+      if (!translated) continue;
+      turns.push({ role: 'user', parts: [{ text: said || translated }] });
+      turns.push({ role: 'model', parts: [{ text: translated }] });
+    }
+    if (!turns.length) return;
+    this.ws.send(JSON.stringify({ clientContent: { turns, turnComplete: false } }));
+    log(`Live: передал контекст (${turns.length / 2} реплик)`);
+  }
+
   _connect() {
     if (!this.shouldRun) return;
     const key = store.getKey();
@@ -599,7 +624,7 @@ export class LiveSession {
       log('Live: соединение открыто');
       ws.send(JSON.stringify({
         setup: {
-          model: LIVE_MODEL,
+          model: liveModel(),
           generationConfig: { responseModalities: ['AUDIO'] },
           systemInstruction: { parts: [{ text: LIVE_PROMPT }] },
           inputAudioTranscription: {},
@@ -620,6 +645,7 @@ export class LiveSession {
       if (msg.setupComplete) {
         this.attempts = 0;
         log('Live: сессия готова');
+        this._sendContext();
         this.h.onState?.('listening');
         return;
       }

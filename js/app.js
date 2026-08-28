@@ -1,15 +1,15 @@
 // Chào! — веб-версия. Диалог (живой перевод, запись, текст), фото, история, настройки.
 
-import { store } from './store.js?v=202608281720';
-import { gemini, LiveSession } from './gemini.js?v=202608281720';
-import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608281720';
-import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608281720';
-import { iconSVG, renderIcons } from './icons.js?v=202608281720';
-import { PHRASES } from './phrases.js?v=202608281720';
-import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202608281720';
+import { store } from './store.js?v=202608281730';
+import { gemini, LiveSession } from './gemini.js?v=202608281730';
+import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608281730';
+import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608281730';
+import { iconSVG, renderIcons } from './icons.js?v=202608281730';
+import { PHRASES } from './phrases.js?v=202608281730';
+import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202608281730';
 
 const $ = (id) => document.getElementById(id);
-const VERSION = '202608281720';
+const VERSION = '202608281730';
 
 let deferredInstall = null;
 addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredInstall = e; });
@@ -79,6 +79,11 @@ function boot() {
   $('photoSend').addEventListener('click', askAboutPhoto);
   $('photoReset').addEventListener('click', () => resetPhoto(true));
   $('photoHistBtn').addEventListener('click', () => openHistory('menus'));
+  $('liveModel').value = store.getLiveModel();
+  $('liveModel').addEventListener('change', (e) => {
+    store.setLiveModel(e.target.value);
+    toast(liveOn ? 'Применится при следующем включении «Волны»' : 'Модель живого перевода изменена');
+  });
 
   // история
   $('histClose').addEventListener('click', () => $('history').classList.add('hidden'));
@@ -453,6 +458,8 @@ async function toggleLive() {
   mic.muted = false;
 
   live = new LiveSession({
+    // Чтобы живой режим знал, о чём уже говорили — в том числе текстом.
+    getContext: () => messages.slice(-6),
     onTurn: handleLiveTurn,
     onAudio: (b64) => player.enqueue(b64),
     onInterrupted: () => player.flush(),

@@ -7,6 +7,7 @@ const K_CURRENT = 'chao.current';
 const K_SESSIONS = 'chao.sessions';
 const K_PHOTOS = 'chao.photos';
 const K_TRCACHE = 'chao.trcache';
+const K_LIVEMODEL = 'chao.livemodel';
 
 const MAX_CURRENT = 300;
 const MAX_SESSIONS = 60;
@@ -30,6 +31,8 @@ function write(key, value) {
 export const store = {
   // --- ключ
   getKey() { return localStorage.getItem(K_KEY) || ''; },
+  getLiveModel() { return localStorage.getItem(K_LIVEMODEL) || ''; },
+  setLiveModel(v) { if (v) localStorage.setItem(K_LIVEMODEL, v); else localStorage.removeItem(K_LIVEMODEL); },
   setKey(k) { localStorage.setItem(K_KEY, k.trim()); },
   hasKey() { return this.getKey().length > 10; },
 
