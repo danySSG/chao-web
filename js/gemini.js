@@ -1,8 +1,8 @@
 // Клиент Gemini: REST-цепочка с фолбэками + Live API по WebSocket.
 // Логика перенесена из нативной версии (Swift), протокол проверен в поле.
 
-import { store } from './store.js?v=202608281647';
-import { log } from './util.js?v=202608281647';
+import { store } from './store.js?v=202608281651';
+import { log } from './util.js?v=202608281651';
 
 const REST_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 const WS_URL = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
@@ -150,6 +150,31 @@ function toStandardSchema(node) {
   return node;
 }
 
+/// Модель нередко дописывает после JSON пояснение или повторяет объект целиком
+/// (Gemma делает это в большинстве ответов) — строгий JSON.parse на этом падает.
+/// Берём первый сбалансированный объект и игнорируем хвост.
+function parseLooseJSON(text) {
+  try { return JSON.parse(text); } catch {}
+  const start = text.indexOf('{');
+  if (start < 0) return null;
+  let depth = 0, inString = false, escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === '{') depth++;
+    else if (ch === '}' && --depth === 0) {
+      try { return JSON.parse(text.slice(start, i + 1)); } catch { return null; }
+    }
+  }
+  return null;
+}
+
 export class GeminiError extends Error {
   constructor(message, kind) { super(message); this.kind = kind; }
 }
@@ -227,17 +252,14 @@ async function callModel(model, { system, parts, contents, schema, maxTokens = 1
     throw new GeminiError('Gemini вернул пустой ответ. Попробуйте ещё раз.', 'empty');
   }
   if (!schema) return text;
-  try { return JSON.parse(text); }
-  catch {
-    // Обрыв по лимиту токенов даёт синтаксически неполный JSON — это не «сломанный ответ»,
-    // а слишком длинный: сообщаем человеку то, что он может исправить.
-    if (reason === 'MAX_TOKENS') {
-      // Обрыв по потолку почти всегда означает не «много текста», а срыв модели
-      // в бесконечные рассуждения: повтор обычно проходит нормально.
-      throw new GeminiError('Модель не справилась с этим фото — попробуйте ещё раз.', 'toolong');
-    }
-    throw new GeminiError('Не удалось разобрать ответ Gemini.', 'parse');
+  const parsed = parseLooseJSON(text);
+  if (parsed) return parsed;
+  if (reason === 'MAX_TOKENS') {
+    // Обрыв по потолку почти всегда означает не «много текста», а срыв модели
+    // в бесконечные рассуждения: повтор обычно проходит нормально.
+    throw new GeminiError('Модель не справилась с этим фото — попробуйте ещё раз.', 'toolong');
   }
+  throw new GeminiError('Не удалось разобрать ответ Gemini.', 'parse');
 }
 
 // Идём по цепочке: квота/перегрузка/закрытая модель — следующая. Прочие ошибки бросаем сразу.
