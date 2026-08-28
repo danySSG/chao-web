@@ -1,15 +1,15 @@
 // Chào! — веб-версия. Диалог (живой перевод, запись, текст), фото, история, настройки.
 
-import { store } from './store.js?v=202608281517';
-import { gemini, LiveSession } from './gemini.js?v=202608281517';
-import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608281517';
-import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608281517';
-import { iconSVG, renderIcons } from './icons.js?v=202608281517';
-import { PHRASES } from './phrases.js?v=202608281517';
-import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202608281517';
+import { store } from './store.js?v=202608281527';
+import { gemini, LiveSession } from './gemini.js?v=202608281527';
+import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608281527';
+import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608281527';
+import { iconSVG, renderIcons } from './icons.js?v=202608281527';
+import { PHRASES } from './phrases.js?v=202608281527';
+import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202608281527';
 
 const $ = (id) => document.getElementById(id);
-const VERSION = '202608281517';
+const VERSION = '202608281527';
 
 let deferredInstall = null;
 addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredInstall = e; });
@@ -688,6 +688,13 @@ async function askAboutPhoto() {
   renderPhoto();
   updatePhotoBar();
 
+  // Основная модель периодически перегружена, и ответ занимает до минуты —
+  // без этой подписи человек решает, что приложение зависло.
+  const slow = setTimeout(() => {
+    const label = $('askingLabel');
+    if (label) label.textContent = 'Всё ещё думаю — иногда это занимает до минуты';
+  }, 12000);
+
   try {
     const answer = await gemini.askPhoto(photo.images.map(i => i.base64), photo.chat);
     photo.chat.push({ role: 'model', text: answer });
@@ -695,6 +702,7 @@ async function askAboutPhoto() {
     log(`вопрос по фото: ${e.message}`);
     photo.chat.push({ role: 'model', text: e.message, failed: true });
   }
+  clearTimeout(slow);
   photo.asking = false;
   renderPhoto();
   updatePhotoBar();
@@ -707,6 +715,19 @@ function quickQuestions() {
   return ['Что тут написано?', 'Что мне делать?'];
 }
 
+/// Модель отвечает с markdown-разметкой. Жирным она выделяет как раз то,
+/// что нужно показать или произнести вслух, — вьетнамские куски делаем озвучиваемыми.
+function richText(raw) {
+  let html = escapeHtml(raw);
+  html = html.replace(/\*\*([\s\S]+?)\*\*/g, (_, t) => {
+    const plain = t.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+    if (isMostlyCyrillic(plain)) return `<b>${t}</b>`;
+    return `<b class="say" data-say="${t}">${t}${iconSVG('speaker', 14)}</b>`;
+  });
+  html = html.replace(/(^|[^*])\*(?!\s)([^*\n]+?)\*/g, (_, before, t) => `${before}<i>${t}</i>`);
+  return html;
+}
+
 function chatHTML() {
   if (!photo.images.length) return '';
   let html = '<div class="qa">';
@@ -715,9 +736,10 @@ function chatHTML() {
       <div class="qa-chips">${quickQuestions().map(q => `<button class="chip" data-q="${escapeHtml(q)}">${escapeHtml(q)}</button>`).join('')}</div>`;
   }
   for (const m of photo.chat) {
-    html += `<div class="qa-msg ${m.role === 'user' ? 'you' : 'ai'}${m.failed ? ' failed' : ''}">${escapeHtml(m.text)}</div>`;
+    const body = m.role === 'user' || m.failed ? escapeHtml(m.text) : richText(m.text);
+    html += `<div class="qa-msg ${m.role === 'user' ? 'you' : 'ai'}${m.failed ? ' failed' : ''}">${body}</div>`;
   }
-  if (photo.asking) html += `<div class="qa-msg ai typing"><span class="pulse-dot"></span>Думаю…</div>`;
+  if (photo.asking) html += `<div class="qa-msg ai typing"><span class="pulse-dot"></span><span id="askingLabel">Думаю…</span></div>`;
   return html + '</div>';
 }
 
@@ -772,6 +794,10 @@ function renderPhoto() {
   box.querySelectorAll('[data-q]').forEach(b => b.addEventListener('click', () => {
     $('photoAsk').value = b.dataset.q;
     askAboutPhoto();
+  }));
+  box.querySelectorAll('.say').forEach(el => el.addEventListener('click', () => {
+    speaker.speak(el.dataset.say, 'vi-VN');
+    haptic(10);
   }));
   if (photo.chat.length) box.lastElementChild.lastElementChild?.scrollIntoView({ block: 'nearest' });
 }

@@ -235,6 +235,15 @@ input:focus { outline: none; border-color: var(--accent); }
 .qa-msg.ai { justify-self: start; background: var(--card); border-bottom-left-radius: 6px; }
 .qa-msg.failed { background: var(--card); color: var(--red); }
 .qa-msg.typing { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+.qa-msg.ai b { font-weight: 700; }
+/* Вьетнамскую фразу из ответа можно сразу произнести — по ней и тапают */
+.qa-msg .say {
+  display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
+  background: var(--accent-soft); color: var(--accent);
+  border-radius: 8px; padding: 1px 7px; margin: 0 1px;
+}
+.qa-msg .say svg { color: var(--accent); flex: none; }
+.qa-msg .say:active { opacity: .6; }
 
 /* Строка вопроса в нижней панели раздела «Фото» */
 .askrow { display: flex; gap: 8px; align-items: center; }
