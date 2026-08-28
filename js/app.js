@@ -1,15 +1,15 @@
 // Chào! — веб-версия. Диалог (живой перевод, запись, текст), фото, история, настройки.
 
-import { store } from './store.js?v=202608281639';
-import { gemini, LiveSession } from './gemini.js?v=202608281639';
-import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608281639';
-import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608281639';
-import { iconSVG, renderIcons } from './icons.js?v=202608281639';
-import { PHRASES } from './phrases.js?v=202608281639';
-import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202608281639';
+import { store } from './store.js?v=202608281647';
+import { gemini, LiveSession } from './gemini.js?v=202608281647';
+import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608281647';
+import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608281647';
+import { iconSVG, renderIcons } from './icons.js?v=202608281647';
+import { PHRASES } from './phrases.js?v=202608281647';
+import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202608281647';
 
 const $ = (id) => document.getElementById(id);
-const VERSION = '202608281639';
+const VERSION = '202608281647';
 
 let deferredInstall = null;
 addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredInstall = e; });
@@ -837,7 +837,7 @@ function renderPhoto() {
   if (result) {
     box.insertAdjacentHTML('beforeend', renderResultHTML(result, true));
     bindDishHandlers(box);
-    updateOrderBar();
+    updateOrderBar();  // после перерисовки блюд счётчик мог измениться
   } else if (!busy && failed.length) {
     box.insertAdjacentHTML('beforeend',
       `<div class="error">${escapeHtml(failed[0].error)}</div>
@@ -943,6 +943,9 @@ function updateOrderBar() {
 /// Пока фото нет — крупные «Камера» и «Галерея»; как появилось — строка вопроса.
 function updatePhotoBar() {
   const has = photo.pages.length > 0;
+  // Кнопка заказа обновляется здесь, а не только рядом с разобранным меню:
+  // иначе после сброса на пустом экране висел счётчик прошлого документа.
+  updateOrderBar();
   $('pickers').classList.toggle('hidden', has);
   $('pickNote').classList.toggle('hidden', has);
   $('askRow').classList.toggle('hidden', !has);
