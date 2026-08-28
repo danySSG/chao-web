@@ -1,15 +1,15 @@
 // Chào! — веб-версия. Диалог (живой перевод, запись, текст), фото, история, настройки.
 
-import { store } from './store.js?v=202608281656';
-import { gemini, LiveSession } from './gemini.js?v=202608281656';
-import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608281656';
-import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608281656';
-import { iconSVG, renderIcons } from './icons.js?v=202608281656';
-import { PHRASES } from './phrases.js?v=202608281656';
-import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202608281656';
+import { store } from './store.js?v=202608281659';
+import { gemini, LiveSession } from './gemini.js?v=202608281659';
+import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608281659';
+import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608281659';
+import { iconSVG, renderIcons } from './icons.js?v=202608281659';
+import { PHRASES } from './phrases.js?v=202608281659';
+import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202608281659';
 
 const $ = (id) => document.getElementById(id);
-const VERSION = '202608281656';
+const VERSION = '202608281659';
 
 let deferredInstall = null;
 addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredInstall = e; });
@@ -572,6 +572,8 @@ async function sendText() {
 
 async function translateAndAdd(fn) {
   busy = true;
+  $('sendBtn').disabled = true;
+  $('micBtn').disabled = true;
   showTyping(true);
   // Если ответ подзатянулся — честно говорим об этом, чтобы не казалось, что зависло
   const slowTimer = setTimeout(() => setStatus('модель думает дольше обычного…', 'busy', null), 6000);
@@ -588,6 +590,8 @@ async function translateAndAdd(fn) {
     clearTimeout(slowTimer);
     showTyping(false);
     busy = false;
+    $('sendBtn').disabled = false;
+    $('micBtn').disabled = false;
   }
 }
 

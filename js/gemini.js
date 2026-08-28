@@ -1,17 +1,34 @@
 // Клиент Gemini: REST-цепочка с фолбэками + Live API по WebSocket.
 // Логика перенесена из нативной версии (Swift), протокол проверен в поле.
 
-import { store } from './store.js?v=202608281656';
-import { log } from './util.js?v=202608281656';
+import { store } from './store.js?v=202608281659';
+import { log } from './util.js?v=202608281659';
 
 const REST_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 const WS_URL = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
 
 export const LIVE_MODEL = 'models/gemini-3.1-flash-live-preview';
 
-// У каждой модели своя дневная квота free tier: flash по 20/день, lite по 500,
-// Gemma 14 400. Мёртвые и перегруженные модели цепочка пропускает сама.
-const CHAIN = [
+// Цепочки разные, потому что задачи разные (замеры 28.08.2026 на одном наборе):
+//
+//   перевод реплики     разбор меню по фото
+//   3.5-flash-lite 1.1с   2.1с   ← быстрее всех, формулировки живые
+//   3.1-flash-lite 1.5с   4.0с
+//   3-flash-preview 2.6с  5.8с   ← лучший русский на фото («тонкие ломтики…»)
+//   gemma-4-31b    2.3с  10.4с   ← кальки с английского, но выручает по квоте
+//
+// В диалоге решает скорость: ответа ждёт живой человек напротив, а разница в
+// качестве перевода коротких реплик между ярусами не улавливается. Поэтому
+// впереди lite — они же ёмче по квоте (500/день против 20 у flash).
+// На фото важнее формулировка и внимание к мелкому тексту, там впереди flash.
+const CHAIN_DIALOG = [
+  'gemini-3.5-flash-lite',
+  'gemini-3.1-flash-lite',
+  'gemini-3-flash-preview',
+  'gemini-3.6-flash',
+  'gemini-3.5-flash',
+];
+const CHAIN_PHOTO = [
   'gemini-3.6-flash',
   'gemini-3.5-flash',
   'gemini-3-flash-preview',
@@ -286,7 +303,8 @@ async function callModel(model, { system, parts, contents, schema, maxTokens = 1
 // Идём по цепочке: квота/перегрузка/закрытая модель — следующая. Прочие ошибки бросаем сразу.
 async function generate(opts) {
   const hasAudio = (opts.parts || []).some(p => p.inlineData?.mimeType?.startsWith('audio/'));
-  const chain = hasAudio ? CHAIN : [...CHAIN, LAST_RESORT];
+  const base = opts.chain === 'photo' ? CHAIN_PHOTO : CHAIN_DIALOG;
+  const chain = hasAudio ? base : [...base, LAST_RESORT];
   let lastErr = null;
 
   for (const model of chain) {
@@ -404,7 +422,7 @@ function photoIsEmpty(r) {
 
 export const gemini = {
   async checkKey(key) {
-    const res = await fetch(`${REST_BASE}/${CHAIN[0]}:generateContent`, {
+    const res = await fetch(`${REST_BASE}/${CHAIN_DIALOG[0]}:generateContent`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
       body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'Ответь одним словом: OK' }] }] }),
@@ -449,7 +467,7 @@ export const gemini = {
 Если блюда на этой странице относятся к одному из них — назови раздел ровно так же.
 Разбирай ТОЛЬКО то, что видно на этой странице, ничего не повторяй с прошлых.` });
     }
-    const opts = { system: PHOTO_PROMPT, parts, schema: PHOTO_SCHEMA };
+    const opts = { system: PHOTO_PROMPT, parts, schema: PHOTO_SCHEMA, chain: 'photo' };
     let r;
     try {
       r = repairPhotoResult(await generate(opts));
@@ -483,6 +501,7 @@ export const gemini = {
       system: PHOTO_CHAT_PROMPT,
       contents,
       parts: imageParts,
+      chain: 'photo',
       maxTokens: 8192,
       temperature: 0.4,
     });
