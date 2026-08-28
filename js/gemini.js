@@ -1,8 +1,8 @@
 // Клиент Gemini: REST-цепочка с фолбэками + Live API по WebSocket.
 // Логика перенесена из нативной версии (Swift), протокол проверен в поле.
 
-import { store } from './store.js?v=202608281532';
-import { log } from './util.js?v=202608281532';
+import { store } from './store.js?v=202608281536';
+import { log } from './util.js?v=202608281536';
 
 const REST_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 const WS_URL = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
@@ -245,7 +245,7 @@ async function generate(opts) {
 // («Clean JSON. Output now. Done. OK.») на сотни строк — прямо в поле summary.
 // Ловим по двум независимым признакам и чистим, чтобы человек не видел мусор.
 
-const SERVICE_RE = /\b(JSON|parseable|control (chars?|tokens?)|newlines?|schema|sanitize|escaped|emit(ting)?|output string|single line)\b/gi;
+const SERVICE_RE = /\b(JSON|parseable|control (chars?|tokens?)|newlines?|schema|sanitize|escaped|emit(ting)?|output|string|format(ting|ted)?|valid|concise|strict(ly)?|adherence|character limit|check length|structured logic)\b/gi;
 
 function looksDegenerate(text) {
   if (!text || text.length < 400) return false;
@@ -256,6 +256,28 @@ function looksDegenerate(text) {
   return (text.match(SERVICE_RE) || []).length >= 5;
 }
 
+/// Второй, более надёжный признак: текст начался по-русски, а дальше идут
+/// предложения вообще без кириллицы. Так выглядит съезд модели в служебную речь
+/// («…Navigation phone: … strict formatting guaranteed correctly output…»),
+/// который по повторам не ловится — слова там каждый раз разные.
+/// Для ответов чата дополнительно требуем служебную лексику: там длинная
+/// вьетнамская фраза без перевода — законный хвост, а не мусор.
+function cutLatinTail(text, requireService = false) {
+  if (!text || !/[а-яё]/i.test(text.slice(0, 200))) return text;
+  // Граница предложения — точка перед словом с заглавной: иначе «тел. 0236…»
+  // считается концом предложения и телефон теряется вместе с хвостом.
+  const parts = text.split(/(?<=[.!?…])\s+(?=[«"(]?[А-ЯЁA-Z])/);
+  for (let i = 1; i < parts.length; i++) {
+    const tail = parts.slice(i).join(' ');
+    if (/[а-яё]/i.test(tail)) continue;
+    if ((tail.match(/[a-z]/gi) || []).length <= 40) continue;
+    if (requireService && (tail.match(SERVICE_RE) || []).length < 2) continue;
+    log('обрезаю служебный хвост в ответе модели');
+    return parts.slice(0, i).join(' ').trim();
+  }
+  return text;
+}
+
 /// Оставляем человеческое начало, отрезая всё от первой служебной фразы.
 function trimToHuman(text) {
   if (!text) return '';
@@ -264,16 +286,30 @@ function trimToHuman(text) {
   return head.trim().replace(/[\s.,;:—-]+$/, '').slice(0, 900);
 }
 
+/// summary и translation обязаны быть по-русски, поэтому чистим их обоими способами.
+function cleanRussianField(text) {
+  if (!text) return text;
+  const out = looksDegenerate(text) ? trimToHuman(text) : text;
+  return cutLatinTail(out);
+}
+
 function repairPhotoResult(r) {
   if (!r || typeof r !== 'object') return r;
-  if (looksDegenerate(r.summary)) {
-    log('summary выродился в петлю — обрезаю до осмысленной части');
-    r.summary = trimToHuman(r.summary);
-  }
+  r.summary = cleanRussianField(r.summary);
   if (Array.isArray(r.blocks)) {
     r.blocks = r.blocks
-      .map(b => ({ ...b, translation: looksDegenerate(b.translation) ? trimToHuman(b.translation) : b.translation }))
+      .map(b => ({ ...b, translation: cleanRussianField(b.translation) }))
       .filter(b => (b.original || '').trim() || (b.translation || '').trim());
+  }
+  if (Array.isArray(r.sections)) {
+    r.sections = r.sections.map(sec => ({
+      ...sec,
+      items: (sec.items || []).map(d => ({
+        ...d,
+        translation: cleanRussianField(d.translation),
+        ingredients: cleanRussianField(d.ingredients),
+      })),
+    }));
   }
   return r;
 }
@@ -356,7 +392,7 @@ export const gemini = {
       maxTokens: 8192,
       temperature: 0.4,
     });
-    const clean = looksDegenerate(text) ? trimToHuman(text) : text.trim();
+    const clean = cutLatinTail(looksDegenerate(text) ? trimToHuman(text) : text, true).trim();
     return clean || 'Не получилось ответить. Попробуйте спросить иначе.';
   },
 };
