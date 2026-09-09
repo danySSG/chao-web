@@ -119,6 +119,17 @@ select {
 
 /* Лента диалога */
 .msg { max-width: 86%; padding: 12px 15px; border-radius: 22px; margin-bottom: 11px; }
+/* Неудачный перевод: остаётся в ленте, пока человек не повторит */
+.msg-failed {
+  max-width: 92%; margin: 0 auto 11px; padding: 13px 15px; border-radius: 18px;
+  background: var(--card); border: 1.5px solid var(--red);
+  display: grid; gap: 9px; justify-items: center; text-align: center;
+}
+.mf-text { font-size: 14px; color: var(--red); line-height: 1.4; }
+.mf-retry {
+  background: var(--red); color: #fff; font-size: 15px; font-weight: 700;
+  padding: 11px 18px; border-radius: 14px; width: 100%;
+}
 .msg .src { font-size: 13px; color: var(--muted); margin-bottom: 3px; }
 .msg .tr { font-size: 19px; font-weight: 650; }
 .msg.mine { background: linear-gradient(135deg, var(--accent), var(--accent-2)); margin-left: auto; }

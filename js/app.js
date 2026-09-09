@@ -1,15 +1,15 @@
 // Chào! — веб-версия. Диалог (живой перевод, запись, текст), фото, история, настройки.
 
-import { store } from './store.js?v=202608281755';
-import { gemini, LiveSession } from './gemini.js?v=202608281755';
-import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202608281755';
-import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202608281755';
-import { iconSVG, renderIcons } from './icons.js?v=202608281755';
-import { PHRASES } from './phrases.js?v=202608281755';
-import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202608281755';
+import { store } from './store.js?v=202609090711';
+import { gemini, LiveSession } from './gemini.js?v=202609090711';
+import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202609090711';
+import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202609090711';
+import { iconSVG, renderIcons } from './icons.js?v=202609090711';
+import { PHRASES } from './phrases.js?v=202609090711';
+import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202609090711';
 
 const $ = (id) => document.getElementById(id);
-const VERSION = '202608281755';
+const VERSION = '202609090711';
 
 let deferredInstall = null;
 addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredInstall = e; });
@@ -22,6 +22,9 @@ let recording = false;
 let busy = false;
 let wakeLock = null;
 let messages = store.getCurrent();
+// Последняя неудачная попытка перевода: держим исходник (запись или текст) в памяти,
+// чтобы повторить БЕЗ просьбы сказать ещё раз — в разговоре это дорогого стоит.
+let pendingRetry = null;
 
 // Текущие фото: images — страницы одного меню/документа, chat — вопросы по ним
 const MAX_PHOTOS = 6;
@@ -356,7 +359,9 @@ function switchTab(name) {
 
 function addMessage(msg) {
   messages.push(msg);
-  store.setCurrent(messages);
+  // Карточки неудач живут только до перезагрузки: повторить их всё равно нельзя,
+  // запись хранится в памяти.
+  store.setCurrent(messages.filter(m => !m.failed));
   renderFeed();
 }
 
@@ -390,6 +395,21 @@ function renderFeed() {
   }
   feed.innerHTML = '';
   for (const m of messages) {
+    if (m.failed) {
+      const box = document.createElement('div');
+      box.className = 'msg-failed';
+      box.innerHTML = `<div class="mf-text"></div>`;
+      box.querySelector('.mf-text').textContent = m.error || 'Не удалось перевести.';
+      if (pendingRetry && pendingRetry.id === m.id) {
+        const again = document.createElement('button');
+        again.className = 'mf-retry';
+        again.textContent = pendingRetry.label;
+        again.addEventListener('click', () => retryFailed(m.id));
+        box.appendChild(again);
+      }
+      feed.appendChild(box);
+      continue;
+    }
     const el = document.createElement('div');
     el.className = `msg ${m.sourceLanguage === 'ru' ? 'mine' : 'theirs'}${m.pending ? ' pending' : ''}`;
     const src = document.createElement('div');
@@ -570,7 +590,9 @@ async function toggleRecording() {
     mic.stop();
     setStatus('');
     if (!wav) { toast('Слишком коротко — скажите фразу целиком'); return; }
-    await translateAndAdd(() => gemini.translateAudio(wav, contextSnippet()));
+    // Запись остаётся в замыкании: повтор не требует говорить снова — в разговоре это важно
+    const again = () => gemini.translateAudio(wav, contextSnippet());
+    await translateAndAdd(again, again, 'Повторить — запись сохранена');
     return;
   }
   try {
@@ -608,10 +630,12 @@ async function sendText() {
   $('sendBtn').classList.add('hidden');
   $('micBtn').classList.remove('hidden');
   $('liveBtn').classList.remove('hidden');
-  await translateAndAdd(() => gemini.translateText(text, contextSnippet()));
+  const again = () => gemini.translateText(text, contextSnippet());
+  await translateAndAdd(again, again, 'Повторить перевод');
 }
 
-async function translateAndAdd(fn) {
+/// fn — сам перевод, retry — как повторить его же, если не выйдет.
+async function translateAndAdd(fn, retry, retryLabel) {
   busy = true;
   $('sendBtn').disabled = true;
   $('micBtn').disabled = true;
@@ -620,13 +644,22 @@ async function translateAndAdd(fn) {
   const slowTimer = setTimeout(() => setStatus('модель думает дольше обычного…', 'busy', null), 6000);
   try {
     const r = await fn();
-    addMessage({ id: crypto.randomUUID(), ts: Date.now(), sourceLanguage: r.sourceLanguage, transcript: r.transcript, translation: r.translation });
-    if (r.sourceLanguage === 'ru') speaker.speak(r.translation, 'vi-VN');
+    const translation = (r.translation || '').trim();
+    if (!translation) {
+      // Пустой перевод — тоже неудача: пустой пузырь в ленте ничем не лучше молчания.
+      log('перевод пустой — показываю как неудачу');
+      addFailure('Не разобрал речь. Попробуйте ещё раз или поднесите телефон ближе.', retry, retryLabel);
+    } else {
+      addMessage({ id: crypto.randomUUID(), ts: Date.now(), sourceLanguage: r.sourceLanguage, transcript: r.transcript, translation });
+      if (r.sourceLanguage === 'ru') speaker.speak(translation, 'vi-VN');
+    }
     setStatus('');
   } catch (e) {
     setStatus('');
-    toast(e.message);
     log(`перевод не удался: ${e.message}`);
+    // Тост исчезает через секунду, а человек стоит перед собеседником с пустым
+    // экраном. Неудача остаётся в ленте — вместе с кнопкой повтора той же записи.
+    addFailure(e.message, retry, retryLabel);
   } finally {
     clearTimeout(slowTimer);
     showTyping(false);
@@ -634,6 +667,23 @@ async function translateAndAdd(fn) {
     $('sendBtn').disabled = false;
     $('micBtn').disabled = liveOn;   // в живом режиме запись всё равно недоступна
   }
+}
+
+/// Неудача попадает в ленту как карточка с кнопкой «Повторить»: исходник
+/// (запись или текст) сохранён, повторять вслух не нужно.
+function addFailure(text, retry, retryLabel) {
+  const id = crypto.randomUUID();
+  if (retry) pendingRetry = { id, run: retry, label: retryLabel || 'Повторить' };
+  addMessage({ id, ts: Date.now(), failed: true, error: text, sourceLanguage: 'ru', transcript: '', translation: '' });
+}
+
+async function retryFailed(id) {
+  if (!pendingRetry || pendingRetry.id !== id || busy) return;
+  const { run, label } = pendingRetry;
+  pendingRetry = null;
+  messages = messages.filter(m => m.id !== id);   // карточку убираем, место займёт результат
+  renderFeed();
+  await translateAndAdd(run, run, label);
 }
 
 /** Пузырь с точками в ленте, пока идёт перевод. */
