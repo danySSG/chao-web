@@ -1,15 +1,15 @@
 // Chào! — веб-версия. Диалог (живой перевод, запись, текст), фото, история, настройки.
 
-import { store } from './store.js?v=202609090711';
-import { gemini, LiveSession } from './gemini.js?v=202609090711';
-import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202609090711';
-import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202609090711';
-import { iconSVG, renderIcons } from './icons.js?v=202609090711';
-import { PHRASES } from './phrases.js?v=202609090711';
-import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202609090711';
+import { store } from './store.js?v=202609090743';
+import { gemini, LiveSession } from './gemini.js?v=202609090743';
+import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202609090743';
+import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202609090743';
+import { iconSVG, renderIcons } from './icons.js?v=202609090743';
+import { PHRASES } from './phrases.js?v=202609090743';
+import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202609090743';
 
 const $ = (id) => document.getElementById(id);
-const VERSION = '202609090711';
+const VERSION = '202609090743';
 
 let deferredInstall = null;
 addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredInstall = e; });
@@ -82,11 +82,6 @@ function boot() {
   $('photoSend').addEventListener('click', askAboutPhoto);
   $('photoReset').addEventListener('click', () => resetPhoto(true));
   $('photoHistBtn').addEventListener('click', () => openHistory('menus'));
-  $('liveModel').value = store.getLiveModel();
-  $('liveModel').addEventListener('change', (e) => {
-    store.setLiveModel(e.target.value);
-    toast(liveOn ? 'Применится при следующем включении «Волны»' : 'Модель живого перевода изменена');
-  });
 
   // история
   $('histClose').addEventListener('click', () => $('history').classList.add('hidden'));
@@ -532,7 +527,12 @@ let ttsSpeaking = false;
 
 function refreshMicMute() {
   const busySpeaking = modelSpeaking || ttsSpeaking;
+  const wasMuted = mic.muted;
   mic.muted = busySpeaking;
+  // Ровно на переходе «начали глушить» сообщаем серверу, что поток прервался:
+  // под мьютом чанки выбрасываются, и без этого признака хвост речи склеится
+  // с началом следующей реплики.
+  if (!wasMuted && busySpeaking && liveOn) live?.endAudioStream();
   if (liveOn) showBanner(!busySpeaking);
 }
 
@@ -546,9 +546,21 @@ speaker.onSpeakingChange = (speaking) => {
   refreshMicMute();
 };
 
+// Распознаватель иногда возвращает вместо содержания НАЗВАНИЕ языка —
+// «Vietnamese», «Español». Такую реплику незачем показывать и тем более
+// тащить в контекст следующих. Сверяем целиком, а не по вхождению: «Вьетнамский
+// банк закрыт» — законная фраза.
+// Повтор названия («Vietnamese Vietnamese», «Вьетнамский, вьетнамский») — тот же
+// мусор, поэтому допускаем до трёх повторений и ничего кроме них.
+const LANGUAGE_NAME_ONLY = /^((vietnamese|tiếng việt|spanish|español|english|russian|русский|вьетнамский|испанский|английский)[\s,.!?…]*){1,3}$/i;
+
 function handleLiveTurn(transcript, translation) {
   const text = translation.trim();
   if (!text) return;
+  if (LANGUAGE_NAME_ONLY.test(text) || (transcript && LANGUAGE_NAME_ONLY.test(transcript.trim()))) {
+    log(`пропускаю самоописание распознавателя: «${(transcript || text).slice(0, 40)}»`);
+    return;
+  }
   const translationIsRu = isMostlyCyrillic(text);
   const transcriptIsRu = transcript ? isMostlyCyrillic(transcript) : !translationIsRu;
 

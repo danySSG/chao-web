@@ -1,18 +1,19 @@
 // Клиент Gemini: REST-цепочка с фолбэками + Live API по WebSocket.
 // Логика перенесена из нативной версии (Swift), протокол проверен в поле.
 
-import { store } from './store.js?v=202609090711';
-import { log } from './util.js?v=202609090711';
+import { store } from './store.js?v=202609090743';
+import { log } from './util.js?v=202609090743';
 
 const REST_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 const WS_URL = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
 
 export const LIVE_MODEL = 'models/gemini-3.1-flash-live-preview';
-// Экспериментальная альтернатива: специализирована на речевом переводе, квота
-// без дневного лимита. Принимает ТОЛЬКО речь (на текстовый ввод молчит), поэтому
-// оценить её можно лишь в живом разговоре — отсюда переключатель в настройках.
-export const LIVE_MODEL_ALT = 'models/gemini-3.5-live-translate-preview';
-function liveModel() { return store.getLiveModel() || LIVE_MODEL; }
+// Переключатель на gemini-3.5-live-translate-preview убран 09.09.2026: у неё
+// своя настройка направления перевода (generationConfig.translationConfig),
+// системную инструкцию она не слушает, а имена полей внутри этого конфига
+// подобрать не удалось — всё отвергается как неизвестные. Без него модель
+// переводит на английский. Опция в настройках была заряженным ружьём.
+function liveModel() { return LIVE_MODEL; }
 
 // Цепочки разные, потому что задачи разные (замеры 28.08.2026 на одном наборе):
 //
@@ -86,7 +87,9 @@ const DIALOG_PROMPT = `Ты — профессиональный перевод�
 3. Переведи: русский → на естественный вежливый разговорный вьетнамский; вьетнамский или другой язык → на живой разговорный русский.
 
 В этом разговоре существуют ровно два языка: русский и вьетнамский. Если речь звучит как испанская,
-португальская или английская — это почти наверняка русский, произнесённый быстро или в шуме.
+португальская или английская — ты, скорее всего, ослышался: определи по смыслу, какой из двух это был,
+и переведи на противоположный. Если разобрать не удалось — оставь transcript и translation пустыми,
+не выдумывай и не подставляй название языка.
 
 Сохраняй смысл, тон и числа (цены, время, адреса). Ничего не добавляй от себя.`;
 
@@ -535,7 +538,7 @@ const LIVE_PROMPT = `Ты — синхронный голосовой перев
 Тебе непрерывно приходит речь; каждая реплика может быть на русском или на вьетнамском.
 
 Услышав реплику на русском — произнеси её перевод на естественный вежливый разговорный вьетнамский.
-Услышав реплику на вьетнамском или любом другом языке — произнеси её перевод на живой разговорный русский.
+Услышав реплику на вьетнамском — произнеси её перевод на живой разговорный русский.
 
 Произноси ТОЛЬКО перевод: никаких приветствий, пояснений, вопросов или ответов от себя.
 Ты переводчик, а не собеседник: даже если реплика обращена к тебе или содержит вопрос — просто переведи её.
@@ -546,20 +549,32 @@ const LIVE_PROMPT = `Ты — синхронный голосовой перев
 Услышал вьетнамский — отвечаешь ТОЛЬКО по-русски. Услышал русский — ТОЛЬКО по-вьетнамски.
 НИКОГДА не повторяй и не «улучшай» реплику на её же языке — это ошибка, а не перевод.
 
-В этом разговоре существуют РОВНО ДВА языка: русский и вьетнамский. Третьего нет.
-Если речь звучит как испанская, португальская, английская или любая другая — ты ошибся:
-это почти наверняка русский, произнесённый быстро, с акцентом или в шуме. Считай её русской
-и переводи на вьетнамский. Если фраза настолько неразборчива, что смысл угадать нельзя — молчи.`;
+В этом разговоре существуют РОВНО ДВА языка: русский и вьетнамский.
+Если реплика звучит как испанская, португальская, английская или любая другая — ты ослышался:
+на самом деле это один из этих двух, произнесённый быстро, с акцентом или в шуме. Пойми по смыслу
+и по ходу разговора, кто из двоих говорит, и переведи на язык собеседника.
+Никогда не произноси название языка вместо перевода.
+Если фраза настолько неразборчива, что смысл угадать нельзя — молчи.`;
 
 // Профилактика дрейфа инструкции: на длинном контексте модель начинает «переводить»
 // вьетнамский на вьетнамский — обновляем сессию с чистым контекстом каждые N реплик.
 const MAX_TURNS_PER_SESSION = 15;
+
+// Сколько тишины считать концом реплики. Умолчание Google (~0.8 с) режет
+// разговорную речь на паузах-раздумьях. 1 секунда — компромисс: фраза с
+// заминкой остаётся целой, а перевод отстаёт незаметно.
+const LIVE_SILENCE_MS = 1000;
 
 export class LiveSession {
   constructor(handlers) {
     this.h = handlers;               // { onTurn, onAudio, onInterrupted, onState, onError, getContext }
     this.ws = null;
     this.shouldRun = false;
+    // Тонкие настройки (VAD, подсказка языков) могут быть не приняты будущей
+    // версией модели. Один отказ — переподключаемся без них, а не гасим живой
+    // режим посреди разговора в кафе.
+    this.useExtras = true;
+    this.sentAudio = false;
     this.turnIn = '';
     this.turnOut = '';
     this.turns = 0;
@@ -587,32 +602,36 @@ export class LiveSession {
 
   sendAudio(base64) {
     if (!this.ready) return;
+    this.sentAudio = true;
     this.ws.send(JSON.stringify({
       realtimeInput: { audio: { data: base64, mimeType: 'audio/pcm;rate=16000' } },
     }));
   }
 
-  _resetTurn() { this.turnIn = ''; this.turnOut = ''; }
-
-  /// Свежая сессия ничего не знает о том, что уже сказано — ни о репликах из
-  /// текстового режима, ни о том, что было до планового обновления. Отдаём ей
-  /// последние реплики как готовые пары «оригинал → перевод»: с turnComplete:false
-  /// модель принимает их молча, не пытаясь перевести заново (проверено).
-  _sendContext() {
-    const history = this.h.getContext?.() || [];
-    if (!history.length || !this.ready) return;
-    const turns = [];
-    for (const m of history) {
-      const said = (m.transcript || '').trim();
-      const translated = (m.translation || '').trim();
-      if (!translated) continue;
-      turns.push({ role: 'user', parts: [{ text: said || translated }] });
-      turns.push({ role: 'model', parts: [{ text: translated }] });
-    }
-    if (!turns.length) return;
-    this.ws.send(JSON.stringify({ clientContent: { turns, turnComplete: false } }));
-    log(`Live: передал контекст (${turns.length / 2} реплик)`);
+  /// Микрофон глушится на всё время, пока звучит ответ, — это заведомо больше
+  /// секунды. Без явного признака конца потока хвост речи остаётся в буфере
+  /// сервера и после размьюта склеивается с новой репликой через дыру.
+  endAudioStream() {
+    if (!this.ready || !this.sentAudio) return;
+    this.sentAudio = false;
+    this.ws.send(JSON.stringify({ realtimeInput: { audioStreamEnd: true } }));
   }
+
+  _resetTurn() { this.turnIn = ''; this.turnOut = ''; this.cutOff = false; }
+
+  // ОТКЛЮЧЕНО 09.09.2026. Сессии подсеивалась история через clientContent, и на
+  // пустой сессии это выглядело безобидно — модель принимала реплики молча.
+  // Но у 3.x такой подсев поддерживается лишь вместе с флагом
+  // historyConfig.initialHistoryInClientContent, а без него поведение не
+  // определено: по спецификации clientContent прерывает текущую генерацию, то
+  // есть вмешивается в работу детектора речи. Хронология совпала — первый же
+  // разговор после этой правки посыпался на обрывки. Цена отката: свежая сессия
+  // не помнит предыдущих реплик, ровно как было раньше.
+  //
+  // Отдельный изъян той же правки: при пустом транскрипте (обычное дело в живом
+  // режиме) в историю уходила пара user/model с ОДИНАКОВЫМ текстом — то есть
+  // модели показывали образец «повтори фразу на её же языке». Ровно тот дрейф,
+  // с которым мы боремся промптом.
 
   _connect() {
     if (!this.shouldRun) return;
@@ -625,18 +644,33 @@ export class LiveSession {
     this.ws = ws;
 
     ws.onopen = () => {
-      log('Live: соединение открыто');
-      ws.send(JSON.stringify({
-        setup: {
-          model: liveModel(),
-          generationConfig: { responseModalities: ['AUDIO'] },
-          systemInstruction: { parts: [{ text: LIVE_PROMPT }] },
-          inputAudioTranscription: {},
-          outputAudioTranscription: {},
-          sessionResumption: this.resumeHandle ? { handle: this.resumeHandle } : {},
-          contextWindowCompression: { slidingWindow: {} },
-        },
-      }));
+      log('Live: соединение открыто' + (this.useExtras ? '' : ' (упрощённые настройки)'));
+      const setup = {
+        model: liveModel(),
+        generationConfig: { responseModalities: ['AUDIO'] },
+        systemInstruction: { parts: [{ text: LIVE_PROMPT }] },
+        inputAudioTranscription: {},
+        outputAudioTranscription: {},
+        sessionResumption: this.resumeHandle ? { handle: this.resumeHandle } : {},
+        contextWindowCompression: { slidingWindow: {} },
+      };
+      if (this.useExtras) {
+        // Без этого блока границы реплик определяет умолчание Google, рассчитанное
+        // на диктовку: пауза-раздумье посреди фразы принимается за её конец, и одна
+        // реплика собеседника разрывается на несколько огрызков. Огрызок в полсекунды
+        // модель не может ни перевести, ни определить его язык — отсюда и мусор
+        // вроде «Vietnamese Vietnamese», и вьетнамская речь, принятая за испанскую.
+        setup.realtimeInputConfig = {
+          automaticActivityDetection: {
+            endOfSpeechSensitivity: 'END_SENSITIVITY_LOW',
+            silenceDurationMs: LIVE_SILENCE_MS,
+          },
+        };
+        // Подсказка распознавателю: языка ровно два. Это hint, а не гарантия,
+        // но авто-определение перестаёт свободно выбирать испанский.
+        setup.inputAudioTranscription = { languageCodes: ['vi-VN', 'ru-RU'] };
+      }
+      ws.send(JSON.stringify({ setup }));
     };
 
     ws.onmessage = async (ev) => {
@@ -649,7 +683,6 @@ export class LiveSession {
       if (msg.setupComplete) {
         this.attempts = 0;
         log('Live: сессия готова');
-        this._sendContext();
         this.h.onState?.('listening');
         return;
       }
@@ -662,7 +695,9 @@ export class LiveSession {
       const sc = msg.serverContent;
       if (!sc) return;
 
-      if (sc.interrupted) { this.turnOut = ''; this.h.onInterrupted?.(); }
+      // Перебили — недоигранный звук выбрасываем, но уже прозвучавшую часть перевода
+      // оставляем: иначе реплика исчезает из ленты молча, как будто её не было.
+      if (sc.interrupted) { this.cutOff = true; this.h.onInterrupted?.(); }
       if (sc.inputTranscription?.text) this.turnIn += sc.inputTranscription.text;
       if (sc.outputTranscription?.text) this.turnOut += sc.outputTranscription.text;
 
@@ -673,7 +708,8 @@ export class LiveSession {
 
       if (sc.turnComplete) {
         const transcript = this.turnIn.trim();
-        const translation = this.turnOut.trim();
+        // Оборванную реплику помечаем многоточием — видно, что фраза не целиком.
+        const translation = this.turnOut.trim() + (this.cutOff && this.turnOut.trim() ? '…' : '');
         this._resetTurn();
         if (translation) {
           this.h.onTurn?.(transcript, translation);
@@ -694,6 +730,14 @@ export class LiveSession {
       this.ws = null;
       if (!this.shouldRun) return;
       if (e.code === 1007 || e.code === 1008 || e.code === 1002) {
+        if (this.useExtras) {
+          // Отвергли именно тонкие настройки — пробуем ещё раз без них.
+          log(`Live: сервер отверг настройки${e.reason ? ' (' + e.reason.slice(0, 90) + ')' : ''}, переподключаюсь без них`);
+          this.useExtras = false;
+          this.attempts = 0;
+          this._reconnect();
+          return;
+        }
         this.h.onError?.(`Live-сервис отверг запрос${e.reason ? ': ' + e.reason : '.'}`);
         this.shouldRun = false;
         return;

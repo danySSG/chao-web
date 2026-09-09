@@ -1,6 +1,6 @@
 // Аудио: микрофон (стрим для Live и запись фразы), проигрывание ответа модели, TTS.
 
-import { bytesToBase64, base64ToBytes, log } from './util.js?v=202609090711';
+import { bytesToBase64, base64ToBytes, log } from './util.js?v=202609090743';
 
 const IN_RATE = 16000;
 const OUT_RATE = 24000;
@@ -17,8 +17,21 @@ export function audioContext() {
 function downsample(input, fromRate) {
   if (fromRate === IN_RATE) return input;
   const ratio = fromRate / IN_RATE;
-  const outLen = Math.floor(input.length / ratio);
+  const outLen = Math.max(1, Math.floor(input.length / ratio));
   const out = new Float32Array(outLen);
+  if (ratio < 1) {
+    // Источник тише 16 кГц — так бывает с Bluetooth-гарнитурой (профиль HFP, 8 кГц).
+    // Усреднение здесь давало start === end и обнуляло каждый второй отсчёт:
+    // поверх речи ложился меандр. Растягиваем линейной интерполяцией.
+    for (let i = 0; i < outLen; i++) {
+      const pos = i * ratio;
+      const a = Math.floor(pos);
+      const b = Math.min(a + 1, input.length - 1);
+      const frac = pos - a;
+      out[i] = input[a] * (1 - frac) + input[b] * frac;
+    }
+    return out;
+  }
   for (let i = 0; i < outLen; i++) {
     const start = Math.floor(i * ratio);
     const end = Math.min(Math.floor((i + 1) * ratio), input.length);
