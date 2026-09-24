@@ -1,15 +1,15 @@
 // Chào! — веб-версия. Диалог (живой перевод, запись, текст), фото, история, настройки.
 
-import { store } from './store.js?v=202609240824';
-import { gemini, LiveSession } from './gemini.js?v=202609240824';
-import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202609240824';
-import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202609240824';
-import { iconSVG, renderIcons } from './icons.js?v=202609240824';
-import { PHRASES } from './phrases.js?v=202609240824';
-import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202609240824';
+import { store } from './store.js?v=202609240847';
+import { gemini, LiveSession } from './gemini.js?v=202609240847';
+import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202609240847';
+import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202609240847';
+import { iconSVG, renderIcons } from './icons.js?v=202609240847';
+import { PHRASES } from './phrases.js?v=202609240847';
+import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202609240847';
 
 const $ = (id) => document.getElementById(id);
-const VERSION = '202609240824';
+const VERSION = '202609240847';
 
 let deferredInstall = null;
 addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredInstall = e; });
@@ -36,6 +36,7 @@ let photo = { pages: [], order: new Map(), chat: [], asking: false, historyId: n
 
 function boot() {
   $('version').textContent = VERSION;
+  $('installId').textContent = store.getInstallId();
   log(`старт · ${matchMedia('(display-mode: standalone)').matches || navigator.standalone ? 'приложение с домашнего экрана' : 'браузер'}`);
 
   if (store.hasKey()) showApp(); else showOnboarding();
@@ -127,9 +128,28 @@ function boot() {
 
 /** Сверяет свою версию с серверной: iOS-кэш обновляет файлы вразнобой,
  *  поэтому при расхождении перезагружаемся принудительно со свежим адресом. */
+/// Что уходит на сервер вместе с проверкой версии — ровно это и ничего больше.
+/// Сервер пишет эти запросы в отдельный журнал без IP-адресов.
+function usageParams() {
+  const ua = navigator.userAgent;
+  const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+  // iPad с iPadOS представляется Mac'ом — отличаем по сенсорному экрану
+  const ios = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+  const platform = ios ? 'i' : /Android/.test(ua) ? 'a' : 'd';
+  return new URLSearchParams({
+    i: store.getInstallId(),        // номер установки
+    m: standalone ? 'a' : 'b',      // установлено на экран / открыто в браузере
+    p: platform,                    // айфон / андроид / компьютер
+    k: store.hasKey() ? '1' : '0',  // дошёл ли человек до работающего ключа
+    v: VERSION,
+  }).toString();
+}
+
 async function checkForUpdate(manual) {
   try {
-    const res = await fetch(`version.json?t=${Date.now()}`, { cache: 'no-store' });
+    let usage = '';
+    try { usage = '&' + usageParams(); } catch {}
+    const res = await fetch(`version.json?t=${Date.now()}${usage}`, { cache: 'no-store' });
     const { version } = await res.json();
     if (!version || version === 'dev') return;
     if (version === VERSION) {

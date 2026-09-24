@@ -8,6 +8,7 @@ const K_SESSIONS = 'chao.sessions';
 const K_PHOTOS = 'chao.photos';
 const K_TRCACHE = 'chao.trcache';
 const K_LIVEMODEL = 'chao.livemodel';
+const K_INSTALL = 'chao.install';
 
 const MAX_CURRENT = 300;
 const MAX_SESSIONS = 60;
@@ -31,6 +32,18 @@ function write(key, value) {
 export const store = {
   // --- ключ
   getKey() { return localStorage.getItem(K_KEY) || ''; },
+  /// Случайный номер установки — только чтобы посчитать, сколько людей пользуется
+  /// приложением. Придуман на этом устройстве, ни с чем не связан; «Удалить всё»
+  /// стирает и его (wipe чистит все ключи chao.*).
+  getInstallId() {
+    let id = '';
+    try { id = localStorage.getItem(K_INSTALL) || ''; } catch {}
+    if (!/^[0-9a-f]{12}$/.test(id)) {
+      id = crypto.randomUUID().replace(/-/g, '').slice(0, 12);
+      try { localStorage.setItem(K_INSTALL, id); } catch {}
+    }
+    return id;
+  },
   getLiveModel() { return localStorage.getItem(K_LIVEMODEL) || ''; },
   setLiveModel(v) { if (v) localStorage.setItem(K_LIVEMODEL, v); else localStorage.removeItem(K_LIVEMODEL); },
   setKey(k) { localStorage.setItem(K_KEY, k.trim()); },
