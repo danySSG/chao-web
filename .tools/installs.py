@@ -7,7 +7,7 @@
 Свои установки (владельца и тестовые) перечисляются по одной в строке
 в /root/chao-mine.txt — вне сайта и вне репозитория — и исключаются сами.
 
-Журнал пишет nginx (формат chao_install в vhost chao): время, номер установки,
+Журнал пишет nginx в /var/log/chao/installs.log (формат chao_install в vhost chao): время, номер установки,
 режим (a — установлено на экран, b — браузер), платформа (i — айфон/айпад,
 a — андроид, d — компьютер), ключ (1 — введён), версия приложения.
 IP-адресов и браузерных строк в журнале нет: связать номер с человеком нельзя.
@@ -21,7 +21,9 @@ import glob
 import gzip
 import sys
 
-LOG = '/var/log/nginx/chao-installs.log*'
+# Свой журнал с ротацией на ~14 месяцев (/etc/logrotate.d/chao-installs);
+# первые записи 24.09.2026 успели лечь в общую папку nginx — читаем и её.
+LOGS = ['/var/log/chao/installs.log*', '/var/log/nginx/chao-installs.log*']
 VN = datetime.timedelta(hours=7)          # дни считаем по вьетнамскому времени
 PLATFORM = {'i': 'айфон', 'a': 'андроид', 'd': 'компьютер'}
 
@@ -40,7 +42,7 @@ except OSError:
 window = int(arg('--days', '0') or 0)
 
 events = []
-for path in sorted(glob.glob(LOG)):
+for path in sorted(p for pattern in LOGS for p in glob.glob(pattern)):
     opener = gzip.open if path.endswith('.gz') else open
     with opener(path, 'rt', errors='replace') as f:
         for line in f:
