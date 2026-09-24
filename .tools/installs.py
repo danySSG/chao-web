@@ -4,6 +4,9 @@
 Запуск на сервере:
     python3 /var/www/chao/.tools/installs.py [--mine НОМЕР1,НОМЕР2] [--days 14]
 
+Свои установки (владельца и тестовые) перечисляются по одной в строке
+в /root/chao-mine.txt — вне сайта и вне репозитория — и исключаются сами.
+
 Журнал пишет nginx (формат chao_install в vhost chao): время, номер установки,
 режим (a — установлено на экран, b — браузер), платформа (i — айфон/айпад,
 a — андроид, d — компьютер), ключ (1 — введён), версия приложения.
@@ -27,7 +30,13 @@ def arg(name, default=''):
     return sys.argv[sys.argv.index(name) + 1] if name in sys.argv else default
 
 
+MINE_FILE = '/root/chao-mine.txt'
 mine = {x.strip() for x in arg('--mine').split(',') if x.strip()}
+try:
+    with open(MINE_FILE) as f:
+        mine |= {line.split('#')[0].strip() for line in f if line.split('#')[0].strip()}
+except OSError:
+    pass
 window = int(arg('--days', '0') or 0)
 
 events = []
