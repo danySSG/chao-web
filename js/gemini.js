@@ -1,19 +1,28 @@
 // Клиент Gemini: REST-цепочка с фолбэками + Live API по WebSocket.
 // Логика перенесена из нативной версии (Swift), протокол проверен в поле.
 
-import { store } from './store.js?v=202609090743';
-import { log } from './util.js?v=202609090743';
+import { store } from './store.js?v=202609240824';
+import { log } from './util.js?v=202609240824';
 
 const REST_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 const WS_URL = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
 
-export const LIVE_MODEL = 'models/gemini-3.1-flash-live-preview';
-// Переключатель на gemini-3.5-live-translate-preview убран 09.09.2026: у неё
-// своя настройка направления перевода (generationConfig.translationConfig),
-// системную инструкцию она не слушает, а имена полей внутри этого конфига
-// подобрать не удалось — всё отвергается как неизвестные. Без него модель
-// переводит на английский. Опция в настройках была заряженным ружьём.
-function liveModel() { return LIVE_MODEL; }
+// Живые модели по порядку. Сравнение 24.09.2026 на синтезированной вьетнамской
+// речи с паузой 0.9 с посреди фразы, через этот самый код, по шесть прогонов:
+//   3.1-flash-live-preview — полный русский перевод одним ходом 6 из 6;
+//   3.8-live               — 3 из 6: раз ушла в английский («Usually these
+//                            large water bottles…»), дважды перевела только
+//                            первую половину, а вторая пропала вовсе.
+// Первые одиночные прогоны показывали 3.8 чуть лучше — это была ошибка теста,
+// который выходил после первого ответа и не видел потерянного хвоста.
+// 3.8 — официальная модель Google для голосовых агентов, поэтому держим её
+// запасной: 3.1 — preview, и если её закроют, живой режим не умрёт.
+//
+// gemini-3.5-live-translate-preview сюда не годится: направление перевода
+// у неё задаётся своим generationConfig.translationConfig, имена полей
+// внутри подобрать не удалось, а без него она переводит на английский.
+export const LIVE_MODELS = ['models/gemini-3.1-flash-live-preview', 'models/gemini-3.8-live'];
+export const LIVE_MODEL = LIVE_MODELS[0];
 
 // Цепочки разные, потому что задачи разные (замеры 28.08.2026 на одном наборе):
 //
@@ -560,10 +569,16 @@ const LIVE_PROMPT = `Ты — синхронный голосовой перев
 // вьетнамский на вьетнамский — обновляем сессию с чистым контекстом каждые N реплик.
 const MAX_TURNS_PER_SESSION = 15;
 
-// Сколько тишины считать концом реплики. Умолчание Google (~0.8 с) режет
-// разговорную речь на паузах-раздумьях. 1 секунда — компромисс: фраза с
-// заминкой остаётся целой, а перевод отстаёт незаметно.
-const LIVE_SILENCE_MS = 1000;
+// Сколько тишины считать концом реплики. Замер 24.09.2026 на синтезированной
+// вьетнамской речи с паузой посреди фразы: сервер закрывает ход раньше номинала,
+// примерно на двух третях порога. 1000 мс держали лишь паузы до ~0.6 с и рвали
+// раздумье в 0.9 с; 1500 держат 0.9 с, рвут 1.3 с; 2000 держат обе.
+// 1500 — компромисс: раздумья посреди фразы целы, реакция ~1.6 с вместо ~1.1.
+// На 3.1 при 1500 и 2000 полный перевод 6/6 одинаково, так что берём меньшую
+// задержку. Если в поле раздумья всё же рвутся — поднимать до 2000 (держит 1.3 с).
+// Склейки реплик двух людей бояться почти не нужно: между ними всегда звучит
+// перевод, а микрофон на это время заглушён.
+const LIVE_SILENCE_MS = 1500;
 
 export class LiveSession {
   constructor(handlers) {
@@ -575,6 +590,8 @@ export class LiveSession {
     // режим посреди разговора в кафе.
     this.useExtras = true;
     this.sentAudio = false;
+    this.modelIndex = 0;     // какая из LIVE_MODELS сейчас в работе
+    this.setupOk = false;    // получен ли setupComplete на текущем соединении
     this.turnIn = '';
     this.turnOut = '';
     this.turns = 0;
@@ -642,11 +659,13 @@ export class LiveSession {
     const ws = new WebSocket(`${WS_URL}?key=${encodeURIComponent(key)}`);
     ws.binaryType = 'arraybuffer';
     this.ws = ws;
+    this.setupOk = false;
 
     ws.onopen = () => {
-      log('Live: соединение открыто' + (this.useExtras ? '' : ' (упрощённые настройки)'));
+      const model = LIVE_MODELS[this.modelIndex];
+      log(`Live: соединение открыто (${model.replace('models/', '')}${this.useExtras ? '' : ', упрощённые настройки'})`);
       const setup = {
-        model: liveModel(),
+        model,
         generationConfig: { responseModalities: ['AUDIO'] },
         systemInstruction: { parts: [{ text: LIVE_PROMPT }] },
         inputAudioTranscription: {},
@@ -681,6 +700,7 @@ export class LiveSession {
       try { msg = JSON.parse(raw); } catch { return; }
 
       if (msg.setupComplete) {
+        this.setupOk = true;
         this.attempts = 0;
         log('Live: сессия готова');
         this.h.onState?.('listening');
@@ -729,12 +749,24 @@ export class LiveSession {
       log(`Live: соединение закрыто (код ${e.code}${e.reason ? ', ' + e.reason : ''})`);
       this.ws = null;
       if (!this.shouldRun) return;
-      if (e.code === 1007 || e.code === 1008 || e.code === 1002) {
-        if (this.useExtras) {
-          // Отвергли именно тонкие настройки — пробуем ещё раз без них.
+      // Отказ ещё до готовности сессии — это не обрыв связи, а «так нельзя»:
+      // не принят setup, модель недоступна для ключа или исчерпана её квота.
+      // Сначала пробуем без тонких настроек, потом следующую модель.
+      const refused = !this.setupOk && [1002, 1007, 1008, 1011].includes(e.code);
+      const rejected = [1002, 1007, 1008].includes(e.code);
+      if (refused || rejected) {
+        if (this.useExtras && rejected) {
           log(`Live: сервер отверг настройки${e.reason ? ' (' + e.reason.slice(0, 90) + ')' : ''}, переподключаюсь без них`);
           this.useExtras = false;
           this.attempts = 0;
+          this._reconnect();
+          return;
+        }
+        if (this.modelIndex < LIVE_MODELS.length - 1) {
+          this.modelIndex++;
+          this.useExtras = true;
+          this.attempts = 0;
+          log(`Live: модель недоступна, перехожу на ${LIVE_MODELS[this.modelIndex].replace('models/', '')}`);
           this._reconnect();
           return;
         }
