@@ -1,15 +1,15 @@
 // Chào! — веб-версия. Диалог (живой перевод, запись, текст), фото, история, настройки.
 
-import { store } from './store.js?v=202609240847';
-import { gemini, LiveSession } from './gemini.js?v=202609240847';
-import { Microphone, Player, speaker, compressImage, audioContext } from './audio.js?v=202609240847';
-import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202609240847';
-import { iconSVG, renderIcons } from './icons.js?v=202609240847';
-import { PHRASES } from './phrases.js?v=202609240847';
-import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202609240847';
+import { store } from './store.js?v=202610301521';
+import { gemini, LiveSession } from './gemini.js?v=202610301521';
+import { Microphone, Player, speaker, compressImage, audioContext, keepAudioRunning } from './audio.js?v=202610301521';
+import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202610301521';
+import { iconSVG, renderIcons } from './icons.js?v=202610301521';
+import { PHRASES } from './phrases.js?v=202610301521';
+import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202610301521';
 
 const $ = (id) => document.getElementById(id);
-const VERSION = '202609240847';
+const VERSION = '202610301521';
 
 let deferredInstall = null;
 addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredInstall = e; });
@@ -510,6 +510,7 @@ async function toggleLive() {
   mic.onChunk = (b64) => live?.sendAudio(b64);
 
   liveOn = true;
+  keepAudioRunning(true);
   updateMicIndicator();
   haptic([10, 40, 10]);
   $('liveBtn').disabled = false;
@@ -519,6 +520,7 @@ async function toggleLive() {
 
 function stopLive() {
   liveOn = false;
+  keepAudioRunning(false);
   updateMicIndicator();
   live?.stop();
   live = null;

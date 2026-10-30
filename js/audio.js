@@ -1,6 +1,6 @@
 // Аудио: микрофон (стрим для Live и запись фразы), проигрывание ответа модели, TTS.
 
-import { bytesToBase64, base64ToBytes, log } from './util.js?v=202609240847';
+import { bytesToBase64, base64ToBytes, log } from './util.js?v=202610301521';
 
 const IN_RATE = 16000;
 const OUT_RATE = 24000;
@@ -10,8 +10,34 @@ let ctx = null;
 export function audioContext() {
   if (!ctx || ctx.state === 'closed') {
     ctx = new (window.AudioContext || window.webkitAudioContext)();
+    // iOS приостанавливает контекст сам — уведомление, Siri, смена наушников.
+    // Без возобновления микрофон перестаёт отдавать звук, а очередь ответа
+    // не доигрывает: живой режим молча зависает, никакой ошибки нет.
+    ctx.onstatechange = () => {
+      log(`звук: контекст ${ctx.state}`);
+      if (ctx.state !== 'running' && ctx.state !== 'closed' && keepAlive) {
+        ctx.resume().catch(() => {});
+      }
+    };
   }
   return ctx;
+}
+
+let keepAlive = false;
+const micBusy = () => keepAlive;
+/// Пока идёт живой режим или запись, контекст должен работать — возобновляем.
+export function keepAudioRunning(on) {
+  keepAlive = on;
+  if (on && ctx && ctx.state !== 'running') ctx.resume().catch(() => {});
+}
+
+/// Звуковая сессия iOS. Стоит хоть раз включить микрофон — iOS переводит её
+/// в режим «звонок», и любой звук (озвучка карточки!) идёт в разговорный
+/// динамик у уха. Пока микрофон не нужен, возвращаем обычное воспроизведение.
+export function setAudioMode(recording) {
+  try {
+    if (navigator.audioSession) navigator.audioSession.type = recording ? 'play-and-record' : 'playback';
+  } catch {}
 }
 
 function downsample(input, fromRate) {
@@ -66,6 +92,7 @@ export class Microphone {
 
   async start() {
     if (this.processor) return;
+    setAudioMode(true);
     this.stream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
     });
@@ -95,6 +122,7 @@ export class Microphone {
     this.processor = this.source = this.stream = null;
     this.recording = null;
     this.muted = false;
+    setAudioMode(false);   // озвучка снова пойдёт в основной динамик
   }
 
   startRecording() { this.recording = []; }
@@ -194,6 +222,18 @@ export class Player {
 
   _setSpeaking(v) {
     if (v && this.unmuteTimer) { clearTimeout(this.unmuteTimer); this.unmuteTimer = null; }
+    // Сторож: «говорю» держится, пока не доиграет последний кусок. Если iOS
+    // приостановит звук, onended не придёт никогда, и микрофон останется
+    // заглушённым навсегда. Ждём расчётный конец очереди плюс запас.
+    clearTimeout(this.watchdog);
+    if (v) {
+      const left = ctx ? Math.max(0, this.head - ctx.currentTime) : 0;
+      this.watchdog = setTimeout(() => {
+        if (!this.speaking) return;
+        log('звук: очередь не доиграла — снимаю заглушку микрофона');
+        this.flush();
+      }, left * 1000 + 3000);
+    }
     if (this.speaking === v) return;
     this.speaking = v;
     this.onSpeakingChange?.(v);
@@ -219,6 +259,7 @@ export const speaker = {
   speak(text, lang) {
     if (!('speechSynthesis' in window) || !text) return;
     this.stop();
+    if (!micBusy()) setAudioMode(false);
     const u = new SpeechSynthesisUtterance(text);
     u.lang = lang;
     u.rate = 0.95;
