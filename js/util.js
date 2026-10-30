@@ -1,12 +1,23 @@
 // Мелкие утилиты: журнал диагностики, base64, тосты.
 
-const LOG_LIMIT = 200;
-const lines = [];
+const LOG_LIMIT = 300;
+// Журнал переживает закрытие приложения: когда что-то зависло, человек обычно
+// сначала закрывает, а потом уже думает о журнале. Храним с датой и время, без
+// переписки — только служебные строки.
+const LOG_KEY = 'chao.log';
+const lines = (() => { try { return JSON.parse(localStorage.getItem(LOG_KEY)) || []; } catch { return []; } })();
+let saveTimer = null;
+function saveLog() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => { try { localStorage.setItem(LOG_KEY, JSON.stringify(lines)); } catch {} }, 300);
+}
 
 export function log(msg) {
-  const t = new Date().toTimeString().slice(0, 8);
+  const d = new Date();
+  const t = `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')} ${d.toTimeString().slice(0, 8)}`;
   lines.push(`[${t}] ${msg}`);
-  if (lines.length > LOG_LIMIT) lines.shift();
+  while (lines.length > LOG_LIMIT) lines.shift();
+  saveLog();
   const el = document.getElementById('log');
   if (el) { el.textContent = lines.join('\n'); el.scrollTop = el.scrollHeight; }
   console.log(msg);
