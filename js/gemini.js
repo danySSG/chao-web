@@ -1,8 +1,8 @@
 // Клиент Gemini: REST-цепочка с фолбэками + Live API по WebSocket.
 // Логика перенесена из нативной версии (Swift), протокол проверен в поле.
 
-import { store } from './store.js?v=202611121730';
-import { log } from './util.js?v=202611121730';
+import { store } from './store.js?v=202611121739';
+import { log } from './util.js?v=202611121739';
 
 const REST_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 const WS_URL = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
@@ -776,6 +776,17 @@ export class LiveSession {
       log(`Live: соединение закрыто (код ${e.code}${e.reason ? ', ' + e.reason : ''})`);
       this.ws = null;
       if (!this.shouldRun) return;
+      // Неверный, просроченный или отозванный ключ: ни упрощённые настройки, ни
+      // другая модель тут не помогут. Раньше это стоило четырёх подключений
+      // впустую и заканчивалось английским «API key not valid» — теперь сразу
+      // то же объяснение по-русски, что и в текстовом переводе.
+      // Только про ключ («API key not valid / expired», API_KEY_INVALID): отказ
+      // в доступе к конкретной модели должен по-прежнему вести на запасную.
+      if (/api.?key/i.test(e.reason || '')) {
+        this.h.onError?.(friendly(403, e.reason));
+        this.shouldRun = false;
+        return;
+      }
       // Отказ ещё до готовности сессии — это не обрыв связи, а «так нельзя»:
       // не принят setup, модель недоступна для ключа или исчерпана её квота.
       // Сначала пробуем без тонких настроек, потом следующую модель.
