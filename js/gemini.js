@@ -1,28 +1,34 @@
 // Клиент Gemini: REST-цепочка с фолбэками + Live API по WebSocket.
 // Логика перенесена из нативной версии (Swift), протокол проверен в поле.
 
-import { store } from './store.js?v=202610301524';
-import { log } from './util.js?v=202610301524';
+import { store } from './store.js?v=202611121730';
+import { log } from './util.js?v=202611121730';
 
 const REST_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 const WS_URL = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
 
-// Живые модели по порядку. Сравнение 24.09.2026 на синтезированной вьетнамской
-// речи с паузой 0.9 с посреди фразы, через этот самый код, по шесть прогонов:
-//   3.1-flash-live-preview — полный русский перевод одним ходом 6 из 6;
-//   3.8-live               — 3 из 6: раз ушла в английский («Usually these
-//                            large water bottles…»), дважды перевела только
-//                            первую половину, а вторая пропала вовсе.
-// Первые одиночные прогоны показывали 3.8 чуть лучше — это была ошибка теста,
-// который выходил после первого ответа и не видел потерянного хвоста.
-// 3.8 — официальная модель Google для голосовых агентов, поэтому держим её
-// запасной: 3.1 — preview, и если её закроют, живой режим не умрёт.
+// Живые модели по порядку. Прежняя основная gemini-3.1-flash-live-preview
+// закрывается 17.11.2026. Замер 12.11.2026 через этот самый код, синтезированная
+// речь, ожидание ВСЕХ ходов:
+//                       фраза с паузой 0.9 с   разговор из 17 реплик ×2
+//   3.1-flash-live          12/12                  34/34
+//   3.8-live                12/12                  34/34   ← задержка та же, ~1.5–1.7 с
+//   3.8-live-extended-thinking (low) 12/12         34/34
+// В сентябре 3.8 давала 3/6 — модель с тех пор подтянули под тем же именем.
+// Просьба в промпте «переводи каждую речь» у 3.8 сделала хуже (33/34, служебное
+// «(Vietnamese translation for …)» вместо перевода) — промпт оставлен прежним.
 //
-// gemini-3.5-live-translate-preview сюда не годится: направление перевода
-// у неё задаётся своим generationConfig.translationConfig, имена полей
-// внутри подобрать не удалось, а без него она переводит на английский.
-export const LIVE_MODELS = ['models/gemini-3.1-flash-live-preview', 'models/gemini-3.8-live'];
-export const LIVE_MODEL = LIVE_MODELS[0];
+// gemini-3.5-live-translate-preview — синхронист: направление задаётся
+// generationConfig.translationConfig.targetLanguageCode, две сессии (ru и vi,
+// echoTargetLanguage: false) дают двусторонний перевод. Но говорить она начинает
+// до конца фразы, а мы глушим микрофон на время ответа — хвост теряется.
+// Годится только для режима в наушниках, без глушения.
+export const LIVE_MODELS = ['models/gemini-3.8-live', 'models/gemini-3.8-live-extended-thinking'];
+
+// extended-thinking без явного уровня размышлений сервер не принимает
+// («Thinking level must be specified»), MINIMAL не поддерживает. Обычная 3.8-live,
+// наоборот, отвергает любой thinkingConfig.
+const LIVE_THINKING = { 'models/gemini-3.8-live-extended-thinking': 'low' };
 
 // Цепочки разные, потому что задачи разные (замеры 28.08.2026 на одном наборе):
 //
@@ -36,17 +42,20 @@ export const LIVE_MODEL = LIVE_MODELS[0];
 // качестве перевода коротких реплик между ярусами не улавливается. Поэтому
 // впереди lite — они же ёмче по квоте (500/день против 20 у flash).
 // На фото важнее формулировка и внимание к мелкому тексту, там впереди flash.
+//
+// 3.5-flash и 3.7-flash Google вывел 08.10.2026: запросы к ним молча уходят на
+// 3.6-flash и 3.8-flash (видно по modelVersion в ответе), поэтому их здесь нет.
+// 3.8-flash на бесплатном тарифе перегружена: 12.11 даже «привет» висел больше
+// полутора минут или получал 503 через ~50 с. 3.6-flash то же меню — 13 блюд
+// из 13 за 6–8 с.
 const CHAIN_DIALOG = [
   'gemini-3.5-flash-lite',
   'gemini-3.1-flash-lite',
   'gemini-3-flash-preview',
   'gemini-3.6-flash',
-  'gemini-3.5-flash',
 ];
 const CHAIN_PHOTO = [
-  'gemini-3.7-flash',  // новее 3.6; пока часто отвечает 503 — цепочка это переживает
   'gemini-3.6-flash',
-  'gemini-3.5-flash',
   'gemini-3-flash-preview',
   'gemini-3.1-flash-lite',
   'gemini-3.5-flash-lite',
@@ -243,7 +252,7 @@ function friendly(status, message, quotaId = '') {
   return message || `Ошибка сервера (HTTP ${status})`;
 }
 
-async function callModel(model, { system, parts, contents, schema, maxTokens = 12288, temperature = 0.2, thinking = 'low' }) {
+async function callModel(model, { system, parts, contents, schema, chain, maxTokens = 12288, temperature = 0.2, thinking = 'low' }) {
   const key = store.getKey();
   if (!key) throw new GeminiError('Не задан ключ Gemini. Добавьте его в Настройках.', 'nokey');
 
@@ -267,18 +276,34 @@ async function callModel(model, { system, parts, contents, schema, maxTokens = 1
     throw new GeminiError('Нет интернета. Откройте «Готовые фразы» — они работают без сети.', 'offline');
   }
 
-  let res;
+  // Перегруженная модель может не отвечать минутами (3.8-flash, 12.11.2026).
+  // Без своего таймаута такое зависание выглядело как «нет интернета», и цепочка
+  // обрывалась, не попробовав исправные модели. 12.11 так же повисла и 3.6-flash —
+  // по таймауту цепочка ушла на 3-flash-preview, и меню разобралось за 6 с.
+  // Обычный ответ: реплика 1–3 с, фото 6–8 с. Gemma медленнее всех (до ~30 с).
+  const limit = isGemma ? 55000 : chain === 'photo' ? 30000 : 20000;
+  let res, data;
   try {
     res = await fetch(`${REST_BASE}/${model}:generateContent`, {
-    method: 'POST',
+      method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: system }] },
         contents: contents || [{ role: 'user', parts }],
         generationConfig,
       }),
+      signal: AbortSignal.timeout?.(limit),
     });
-  } catch {
+    // Ответ без потоковой выдачи: тело приходит целиком в конце, и таймаут
+    // должен охватывать и его чтение.
+    if (res.ok) data = await res.json();
+  } catch (e) {
+    if (e?.name === 'TimeoutError' || e?.name === 'AbortError') {
+      markOutOfQuota(model, 3 * 60 * 1000);
+      log(`${model}: нет ответа ${limit / 1000} с, пропускаю 3 мин`);
+      throw new GeminiError('Gemini слишком долго не отвечает. Попробуйте ещё раз чуть позже.', 'timeout');
+    }
+    if (e?.name === 'SyntaxError') throw new GeminiError('Не удалось разобрать ответ Gemini.', 'parse');
     throw new GeminiError('Не удалось связаться с Gemini. Проверьте интернет.', 'offline');
   }
 
@@ -307,8 +332,7 @@ async function callModel(model, { system, parts, contents, schema, maxTokens = 1
     throw err;
   }
 
-  const data = await res.json();
-  const cand = data.candidates?.[0];
+  const cand = data?.candidates?.[0];
   const reason = cand?.finishReason;
   const text = (cand?.content?.parts || []).map(p => p.text).filter(Boolean).join('');
   if (!text) {
@@ -358,7 +382,7 @@ async function generate(opts) {
       if (e.kind === 'offline' || e.kind === 'nokey') throw e;
       const m = (e.raw || e.message || '').toLowerCase();
       const retriable =
-        e.kind === 'quota' ||
+        e.kind === 'quota' || e.kind === 'timeout' ||
         /not found|no longer available|does not exist/.test(m) ||
         /high demand|overloaded|try again later|unavailable/.test(m) ||
         e.status === 503 || e.status === 500;
@@ -673,6 +697,9 @@ export class LiveSession {
         sessionResumption: this.resumeHandle ? { handle: this.resumeHandle } : {},
         contextWindowCompression: { slidingWindow: {} },
       };
+      // Обязательное поле для своей модели, а не тонкая настройка: без него
+      // сессия не откроется, поэтому вне блока useExtras.
+      if (LIVE_THINKING[model]) setup.generationConfig.thinkingConfig = { thinkingLevel: LIVE_THINKING[model] };
       if (this.useExtras) {
         // Без этого блока границы реплик определяет умолчание Google, рассчитанное
         // на диктовку: пауза-раздумье посреди фразы принимается за её конец, и одна
