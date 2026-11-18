@@ -1,6 +1,6 @@
 // Аудио: микрофон (стрим для Live и запись фразы), проигрывание ответа модели, TTS.
 
-import { bytesToBase64, base64ToBytes, log } from './util.js?v=202611181752';
+import { bytesToBase64, base64ToBytes, log } from './util.js?v=202611181805';
 
 const IN_RATE = 16000;
 const OUT_RATE = 24000;
