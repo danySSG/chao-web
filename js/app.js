@@ -1,12 +1,12 @@
 // Chào! — веб-версия. Диалог (живой перевод, запись, текст), фото, история, настройки.
 
-import { store } from './store.js?v=202611181805';
-import { gemini, LiveSession } from './gemini.js?v=202611181805';
-import { Microphone, Player, speaker, compressImage, audioContext, keepAudioRunning } from './audio.js?v=202611181805';
-import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202611181805';
-import { iconSVG, renderIcons } from './icons.js?v=202611181805';
-import { PHRASES, EXPLAIN } from './phrases.js?v=202611181805';
-import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202611181805';
+import { store } from './store.js?v=202611182108';
+import { gemini, LiveSession } from './gemini.js?v=202611182108';
+import { Microphone, Player, speaker, compressImage, audioContext, keepAudioRunning } from './audio.js?v=202611182108';
+import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202611182108';
+import { iconSVG, renderIcons } from './icons.js?v=202611182108';
+import { PHRASES, EXPLAIN } from './phrases.js?v=202611182108';
+import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202611182108';
 
 // Копия на GitHub Pages — старый вход: учёт установок и обещания о приватности
 // там не действуют. Ведём на рабочий адрес (раньше это делал скрипт в <head>,
@@ -14,7 +14,7 @@ import { studioIllustration, shareIllustration, addHomeIllustration, androidInst
 if (location.hostname.endsWith('github.io')) location.replace('https://chao.svoivietnam.com/');
 
 const $ = (id) => document.getElementById(id);
-const VERSION = '202611181805';
+const VERSION = '202611182108';
 
 let deferredInstall = null;
 addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredInstall = e; });
