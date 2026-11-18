@@ -3,7 +3,8 @@
 Проверка гипотезы: может ли живой голосовой перевод (Gemini Live API)
 работать в браузере на iPhone так же, как в нативном приложении.
 
-Открыть: https://danyssg.github.io/chao-web/
+Рабочая версия: https://chao.svoivietnam.com/ (сервер rendermix-netcup, /var/www/chao — git-клон этого репозитория).
+Копия на GitHub Pages (https://danyssg.github.io/chao-web/) — старый прототип, пользователей туда не вести.
 
 Что проверяем:
 - доступ к микрофону в PWA, добавленной на домашний экран;
@@ -17,5 +18,6 @@
 
 После правок обязательно запустить `./build.sh` — он проставит новую версию
 во все ссылки на файлы, иначе браузер и установленная PWA покажут старую
-закэшированную версию. Затем `git add -A && git commit && git push`;
-GitHub Pages пересобирается около минуты.
+закэшированную версию. Затем `git add -A && git commit && git push`, и на сервере:
+`ssh root@rendermix-netcup 'git -C /var/www/chao pull --ff-only'`.
+Приложение само увидит новую version.json и обновится.
