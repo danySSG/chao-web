@@ -13,6 +13,8 @@ const MAX_CURRENT = 300;
 const MAX_SESSIONS = 60;
 const MAX_PHOTOS = 30;
 const MAX_CACHED_TRANSLATIONS = 150;
+const K_CARDS = 'chao.cards';
+const MAX_CARDS = 60;
 
 function read(key, fallback) {
   try { return JSON.parse(localStorage.getItem(key)) ?? fallback; }
@@ -161,6 +163,16 @@ export const store = {
     }
     write(K_TRCACHE, cache);
   },
+
+  // --- «Мои фразы»: свои фразы и адреса, работают без сети
+  getCards() { return read(K_CARDS, []); },
+  hasCard(vi) { return this.getCards().some(c => c.vi === vi); },
+  addCard(card) {
+    const cards = this.getCards().filter(c => c.vi !== card.vi);
+    cards.unshift(card);
+    return writeWithRoom(K_CARDS, cards.slice(0, MAX_CARDS), { keepSessions: true });
+  },
+  removeCard(vi) { write(K_CARDS, this.getCards().filter(c => c.vi !== vi)); },
 
   /// Что выброшено ради места с прошлого вызова: { photos, sessions }.
   takeEvicted() {

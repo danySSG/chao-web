@@ -5,7 +5,7 @@ import { gemini, LiveSession } from './gemini.js?v=202611181730';
 import { Microphone, Player, speaker, compressImage, audioContext, keepAudioRunning } from './audio.js?v=202611181730';
 import { log, toast, isMostlyCyrillic, fmtDate, plural, haptic } from './util.js?v=202611181730';
 import { iconSVG, renderIcons } from './icons.js?v=202611181730';
-import { PHRASES } from './phrases.js?v=202611181730';
+import { PHRASES, EXPLAIN } from './phrases.js?v=202611181730';
 import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202611181730';
 
 const $ = (id) => document.getElementById(id);
@@ -346,6 +346,35 @@ async function requestPersistentStorage() {
 function openPhrases() {
   const box = $('phrasesContent');
   box.innerHTML = '';
+  // Свои — первыми: адрес для водителя и «как обычно» нужны чаще всего
+  const cards = store.getCards();
+  if (cards.length) {
+    const title = document.createElement('div');
+    title.className = 'section-title';
+    title.textContent = 'МОИ ФРАЗЫ';
+    box.appendChild(title);
+    for (const c of cards) {
+      const row = document.createElement('div');
+      row.className = 'phrase-row';
+      const el = document.createElement('button');
+      el.className = 'phrase';
+      el.innerHTML = `<span class="ph-ru"></span><span class="ph-vi" lang="vi"></span>`;
+      el.querySelector('.ph-ru').textContent = c.ru;
+      el.querySelector('.ph-vi').textContent = c.vi;
+      el.addEventListener('click', () => usePhrase(c.ru, c.vi));
+      const del = document.createElement('button');
+      del.className = 'ph-del';
+      del.setAttribute('aria-label', 'Убрать из моих фраз');
+      del.innerHTML = iconSVG('trash', 18);
+      del.addEventListener('click', async () => {
+        if (!(await askConfirm('Убрать из моих фраз?', c.ru))) return;
+        store.removeCard(c.vi);
+        openPhrases();
+      });
+      row.append(el, del);
+      box.appendChild(row);
+    }
+  }
   for (const group of PHRASES) {
     const title = document.createElement('div');
     title.className = 'section-title';
@@ -354,7 +383,7 @@ function openPhrases() {
     for (const [ru, vi] of group.items) {
       const el = document.createElement('button');
       el.className = 'phrase';
-      el.innerHTML = `<span class="ph-ru"></span><span class="ph-vi"></span><span class="ph-speak" data-icon="speaker" data-icon-size="18"></span>`;
+      el.innerHTML = `<span class="ph-ru"></span><span class="ph-vi" lang="vi"></span><span class="ph-speak" data-icon="speaker" data-icon-size="18"></span>`;
       el.querySelector('.ph-ru').textContent = ru;
       el.querySelector('.ph-vi').textContent = vi;
       el.addEventListener('click', () => usePhrase(ru, vi));
@@ -687,19 +716,20 @@ function renderFeed() {
         <div class="mode"><span class="mode-ico mic">${iconSVG('mic', 19)}</span>
           <b>Микрофон — по очереди</b>Нажали, сказали фразу, нажали ещё раз. Перевод придёт следом. Годится, когда шумно или нужна одна фраза.</div>
         <div class="mode"><span class="mode-ico wave">${iconSVG('wave', 19)}</span>
-          <b>Волна — живой разговор</b>Включили один раз и говорите по очереди с собеседником: переводит на лету, нажимать между репликами не нужно.</div>
+          <b>Волна — живой разговор</b>Включили один раз и говорите по очереди с собеседником: переводит на лету, нажимать между репликами не нужно. Переводит всё, что слышит, — чтобы поговорить между собой, выключите.</div>
       </div>
       <div class="quick" id="quickPhrases"></div></div>`;
     const quick = [
+      ['Объяснить собеседнику', EXPLAIN[1], EXPLAIN[0]],
       ['Здравствуйте', 'Xin chào'],
       ['Сколько стоит?', 'Bao nhiêu tiền?'],
       ['Спасибо', 'Cảm ơn'],
-      ['Где туалет?', 'Nhà vệ sinh ở đâu?'],
+      ['Позвать официанта', 'Em ơi!'],
     ];
     const box = $('quickPhrases');
-    for (const [ru, vi] of quick) {
+    for (const [label, vi, ru = label] of quick) {
       const b = document.createElement('button');
-      b.textContent = ru;
+      b.textContent = label;
       b.addEventListener('click', () => usePhrase(ru, vi));
       box.appendChild(b);
     }
@@ -772,7 +802,25 @@ function openBig(m) {
   const lang = isMostlyCyrillic(m.translation) ? 'ru-RU' : 'vi-VN';
   $('bigSpeak').onclick = () => speaker.speak(m.translation, lang);
   bigText = m.translation;
+  // В «Мои фразы» — пара «по-русски → по-вьетнамски», с какой бы стороны ни говорили
+  const vi = lang === 'vi-VN' ? m.translation : m.transcript;
+  const ru = lang === 'vi-VN' ? m.transcript : m.translation;
+  setStar(vi && ru ? { ru, vi } : null);
   showBig();
+}
+
+function setStar(card) {
+  const b = $('bigStar');
+  b.classList.toggle('hidden', !card);
+  if (!card) return;
+  const on = store.hasCard(card.vi);
+  b.innerHTML = iconSVG(on ? 'starOn' : 'star', 20);
+  b.onclick = () => {
+    if (store.hasCard(card.vi)) { store.removeCard(card.vi); toast('Убрано из моих фраз'); }
+    else if (store.addCard(card)) { toast('В моих фразах — откроются в разговорнике и без сети', 3200); haptic(12); }
+    else { toast('Не хватило места'); }
+    setStar(card);
+  };
 }
 
 function showBig() {
@@ -1907,6 +1955,7 @@ function showOrder() {
   const phrase = 'Cho tôi ' + items.map(i => `${i.n} ${i.dish.original}`).join(', ');
   $('bigSpeak').onclick = () => speaker.speak(phrase, 'vi-VN');
   bigText = 'Cho tôi gọi món:\n' + items.map(i => `${i.n} × ${i.dish.original}`).join('\n');
+  setStar(null);
   showBig();
 }
 

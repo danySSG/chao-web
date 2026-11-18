@@ -21,6 +21,8 @@ const ICONS = {
   close: P('M6.4 5a1 1 0 0 0-1.4 1.4l5.6 5.6-5.6 5.6a1 1 0 1 0 1.4 1.4l5.6-5.6 5.6 5.6a1 1 0 0 0 1.4-1.4L13.4 12 19 6.4A1 1 0 0 0 17.6 5L12 10.6 6.4 5Z'),
   check: P('M20.3 5.7a1 1 0 0 1 .1 1.4l-9.6 11a1 1 0 0 1-1.5 0l-5.4-5.5a1 1 0 1 1 1.4-1.4l4.7 4.7 8.9-10.2a1 1 0 0 1 1.4-.1Z'),
   external: P('M14 3.5a1 1 0 0 1 1-1h5.5a1 1 0 0 1 1 1V9a1 1 0 1 1-2 0V5.9l-7.3 7.3a1 1 0 0 1-1.4-1.4l7.3-7.3H15a1 1 0 0 1-1-1ZM5 6.5h5a1 1 0 1 1 0 2H5.5v10h10V14a1 1 0 1 1 2 0v5a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 19V8A1.5 1.5 0 0 1 5 6.5Z'),
+  star: `<g stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"><path d="M12 3.6l2.5 5.2 5.7.8-4.1 4 1 5.6L12 16.5l-5.1 2.7 1-5.6-4.1-4 5.7-.8z"/></g>`,
+  starOn: P('M12 3.6l2.5 5.2 5.7.8-4.1 4 1 5.6L12 16.5l-5.1 2.7 1-5.6-4.1-4 5.7-.8z'),
   // Контурные — для кнопок на экране показа
   copy: `<g stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"><rect x="8.5" y="8.5" width="12" height="12" rx="2.5"/><path d="M15.5 8.5V6A2.5 2.5 0 0 0 13 3.5H6A2.5 2.5 0 0 0 3.5 6v7A2.5 2.5 0 0 0 6 15.5h2.5"/></g>`,
   share: `<g stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"><path d="M12 3.5v11M8 7.5l4-4 4 4"/><path d="M8.5 10.5H7A1.5 1.5 0 0 0 5.5 12v7A1.5 1.5 0 0 0 7 20.5h10a1.5 1.5 0 0 0 1.5-1.5v-7A1.5 1.5 0 0 0 17 10.5h-1.5"/></g>`,

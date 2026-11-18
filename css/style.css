@@ -521,6 +521,11 @@ a.btn { text-decoration: none; }
 .ph-ru { font-weight: 650; font-size: 15px; }
 .ph-vi { grid-column: 1; font-size: 15px; color: var(--accent); }
 .ph-speak { grid-row: 1 / 3; grid-column: 2; color: var(--accent); opacity: .65; }
+/* «Мои фразы»: справа — убрать вместо динамика */
+.phrase-row { display: flex; align-items: center; gap: 6px; }
+.phrase-row .phrase { flex: 1; }
+.ph-del { width: 44px; height: 44px; flex: none; border-radius: 50%; display: grid; place-items: center; color: var(--muted); }
+.close.star { right: 64px; }
 
 /* Переход между вкладками */
 @keyframes tab-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
