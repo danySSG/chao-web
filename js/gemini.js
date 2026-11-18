@@ -607,9 +607,24 @@ const MAX_TURNS_PER_SESSION = 15;
 // перевод, а микрофон на это время заглушён.
 const LIVE_SILENCE_MS = 1500;
 
+// Пока соединение не готово (переподключение, плановое обновление), звук не
+// выбрасываем, а копим — последние ~3 с (base64 PCM16 16 кГц ≈ 43 КБ/с) — и
+// досылаем после setupComplete. Иначе первые полсекунды ответа собеседника,
+// начатого сразу после перевода, пропадали.
+const PENDING_MAX = 128 * 1024;
+// Сокет не успевает отдавать звук: ~2 с в очереди — предупреждаем, ~10 с —
+// соединение считаем вставшим. Иначе речь копится в буфере, и потом
+// переводятся фразы минутной давности.
+const SLOW_BYTES = 96 * 1024;
+const STUCK_BYTES = 440 * 1024;
+
+const cyr = (t) => (t.match(/[а-яё]/gi) || []).length > (t.match(/[a-z]/gi) || []).length / 2;
+const langOf = (t) => (t ? (cyr(t.normalize('NFD')) ? 'ru' : 'vi') : '—');
+
 export class LiveSession {
   constructor(handlers) {
-    this.h = handlers;               // { onTurn, onAudio, onInterrupted, onState, onError, getContext }
+    // { onTurn, onSilentTurn, onHeard, onAudio, onInterrupted, onState, onError, isQuiet, micInfo }
+    this.h = handlers;
     this.ws = null;
     this.shouldRun = false;
     // Тонкие настройки (VAD, подсказка языков) могут быть не приняты будущей
@@ -624,6 +639,9 @@ export class LiveSession {
     this.turns = 0;
     this.attempts = 0;
     this.resumeHandle = null;
+    this.pending = [];       // звук, записанный, пока соединение не готово
+    this.stats = { sent: 0, recv: 0 };
+    this.lastServerAt = 0;
   }
 
   start() {
@@ -631,37 +649,135 @@ export class LiveSession {
     this.attempts = 0;
     this.turns = 0;
     this.resumeHandle = null;
+    this.pending = [];
+    clearInterval(this.pulseTimer);
+    this.pulseTimer = setInterval(() => this._pulse(), 60000);
     this._connect();
   }
 
   stop() {
     this.shouldRun = false;
-    try { this.ws?.close(1000); } catch {}
+    this._clearTimers();
+    clearInterval(this.pulseTimer);
+    const ws = this.ws;
     this.ws = null;
+    try { ws?.close(1000); } catch {}
+    this.pending = [];
     this._resetTurn();
     this.h.onState?.('idle');
   }
 
-  get ready() { return this.ws?.readyState === WebSocket.OPEN; }
+  /// Новый разговор (✎ или продолжение из истории): прошлый собеседник модели
+  /// больше не нужен, а момент самый дешёвый — никто не говорит.
+  fresh() {
+    if (!this.shouldRun) return;
+    log('Live: новый разговор — чистая сессия');
+    this.turns = 0;
+    this.resumeHandle = null;
+    this._reconnect({ counted: false });
+  }
+
+  /// Переподключиться сразу, без отсчёта попыток: вернулась сеть, связь встала.
+  kick(reason) {
+    if (!this.shouldRun) return;
+    log(`Live: ${reason} — переподключаюсь`);
+    this._reconnect({ counted: false });
+  }
+
+  get ready() { return this.ws?.readyState === WebSocket.OPEN && this.setupOk; }
 
   sendAudio(base64) {
-    if (!this.ready) return;
+    if (!this.shouldRun) return;
+    if (!this.ready) { this._hold(base64); return; }
+    this._send(base64);
+  }
+
+  _hold(chunk) {
+    this.pending.push(chunk);
+    let total = 0;
+    for (const c of this.pending) total += c ? c.length : 0;
+    while (total > PENDING_MAX && this.pending.length) {
+      const c = this.pending.shift();
+      total -= c ? c.length : 0;
+    }
+  }
+
+  _send(base64) {
     this.sentAudio = true;
+    this.stats.sent++;
     this.ws.send(JSON.stringify({
       realtimeInput: { audio: { data: base64, mimeType: 'audio/pcm;rate=16000' } },
     }));
+    this._checkBuffer();
+  }
+
+  _checkBuffer() {
+    const b = this.ws?.bufferedAmount || 0;
+    if (b > STUCK_BYTES) {
+      log(`Live: связь встала — ${Math.round(b / 1024)} КБ звука не ушло`);
+      this.slow = false;
+      this._reconnect({ counted: false });
+      return;
+    }
+    if (!this.slow && b > SLOW_BYTES) {
+      this.slow = true;
+      log(`Live: связь не успевает, в очереди ${Math.round(b / 1024)} КБ`);
+      this.h.onState?.('slow');
+    } else if (this.slow && b < SLOW_BYTES / 4) {
+      this.slow = false;
+      log('Live: связь догнала');
+      this.h.onState?.('listening');
+    }
   }
 
   /// Микрофон глушится на всё время, пока звучит ответ, — это заведомо больше
   /// секунды. Без явного признака конца потока хвост речи остаётся в буфере
   /// сервера и после размьюта склеивается с новой репликой через дыру.
   endAudioStream() {
-    if (!this.ready || !this.sentAudio) return;
+    if (!this.ready) {
+      // Конец потока посреди накопленного звука — отметка, досылается по порядку
+      if (this.pending.length && this.pending[this.pending.length - 1] !== null) this.pending.push(null);
+      return;
+    }
+    if (!this.sentAudio) return;
     this.sentAudio = false;
     this.ws.send(JSON.stringify({ realtimeInput: { audioStreamEnd: true } }));
   }
 
-  _resetTurn() { this.turnIn = ''; this.turnOut = ''; this.cutOff = false; }
+  _flushPending() {
+    const q = this.pending;
+    this.pending = [];
+    const n = q.filter(Boolean).length;
+    if (n) log(`Live: дослал ${n} кусков звука, записанных во время подключения`);
+    for (const c of q) {
+      if (!this.ready) return;
+      if (c) this._send(c); else this.endAudioStream();
+    }
+  }
+
+  _resetTurn() {
+    if (this.turnIn || this.turnOut) this.h.onHeard?.(false);
+    this.turnIn = ''; this.turnOut = ''; this.cutOff = false;
+    this.inAt = 0; this.audioAt = 0;
+  }
+
+  _clearTimers() {
+    clearTimeout(this.retryTimer);
+    clearTimeout(this.stableTimer);
+    clearTimeout(this.goAwayTimer);
+    this.goAwayPending = false;
+  }
+
+  /// Раз в минуту — одна строка без текста: по ней видно, жив ли микрофон,
+  /// доходит ли звук и отвечает ли сервер, когда «волна молчит».
+  _pulse() {
+    if (!this.shouldRun) return;
+    const ws = this.ws;
+    const state = !ws ? 'нет соединения' : this.ready ? `в очереди ${Math.round(ws.bufferedAmount / 1024)} КБ` : 'подключаюсь';
+    const mic = this.h.micInfo?.();
+    log(`Live пульс: ушло ${this.stats.sent}, пришло ${this.stats.recv}, ${state}${mic ? '; ' + mic : ''}`);
+    this.stats = { sent: 0, recv: 0 };
+  }
 
   // ОТКЛЮЧЕНО 09.09.2026. Сессии подсеивалась история через clientContent, и на
   // пустой сессии это выглядело безобидно — модель принимала реплики молча.
@@ -687,10 +803,13 @@ export class LiveSession {
     ws.binaryType = 'arraybuffer';
     this.ws = ws;
     this.setupOk = false;
+    this.slow = false;
+    this.connResumed = !!this.resumeHandle;
+    this.connTurns = 0;
 
     ws.onopen = () => {
       const model = LIVE_MODELS[this.modelIndex];
-      log(`Live: соединение открыто (${model.replace('models/', '')}${this.useExtras ? '' : ', упрощённые настройки'})`);
+      log(`Live: соединение открыто (${model.replace('models/', '')}${this.useExtras ? '' : ', упрощённые настройки'}${this.connResumed ? ', возобновляю' : ''})`);
       const setup = {
         model,
         generationConfig: { responseModalities: ['AUDIO'] },
@@ -723,24 +842,32 @@ export class LiveSession {
     };
 
     ws.onmessage = async (ev) => {
+      if (this.ws !== ws) return;
       let raw = ev.data;
       if (raw instanceof ArrayBuffer) raw = new TextDecoder().decode(raw);
       else if (raw instanceof Blob) raw = await raw.text();
       let msg;
       try { msg = JSON.parse(raw); } catch { return; }
+      this.stats.recv++;
+      this.lastServerAt = Date.now();
 
       if (msg.setupComplete) {
         this.setupOk = true;
-        this.attempts = 0;
+        this.retriedBusy = false;
         log('Live: сессия готова');
+        // Счётчик попыток обнуляем не сразу: сессия, которая готова и тут же
+        // умирает, иначе возобновлялась бы по кругу бесконечно.
+        clearTimeout(this.stableTimer);
+        this.stableTimer = setTimeout(() => { this.attempts = 0; }, 20000);
         this.h.onState?.('listening');
+        this._flushPending();
         return;
       }
       if (msg.sessionResumptionUpdate?.resumable && msg.sessionResumptionUpdate.newHandle) {
         this.resumeHandle = msg.sessionResumptionUpdate.newHandle;
         return;
       }
-      if (msg.goAway) { log('Live: сервер закрывает соединение, переподключаюсь'); this._reconnect(); return; }
+      if (msg.goAway) { this._goAway(msg.goAway.timeLeft); return; }
 
       const sc = msg.serverContent;
       if (!sc) return;
@@ -748,35 +875,28 @@ export class LiveSession {
       // Перебили — недоигранный звук выбрасываем, но уже прозвучавшую часть перевода
       // оставляем: иначе реплика исчезает из ленты молча, как будто её не было.
       if (sc.interrupted) { this.cutOff = true; this.h.onInterrupted?.(); }
-      if (sc.inputTranscription?.text) this.turnIn += sc.inputTranscription.text;
+      if (sc.inputTranscription?.text) {
+        if (!this.turnIn && !this.turnOut) this.h.onHeard?.(true);
+        if (!this.inAt) this.inAt = Date.now();
+        this.turnIn += sc.inputTranscription.text;
+      }
       if (sc.outputTranscription?.text) this.turnOut += sc.outputTranscription.text;
 
       for (const p of sc.modelTurn?.parts || []) {
         const d = p.inlineData;
-        if (d?.mimeType?.startsWith('audio/pcm') && d.data) this.h.onAudio?.(d.data);
-      }
-
-      if (sc.turnComplete) {
-        const transcript = this.turnIn.trim();
-        // Оборванную реплику помечаем многоточием — видно, что фраза не целиком.
-        const translation = this.turnOut.trim() + (this.cutOff && this.turnOut.trim() ? '…' : '');
-        this._resetTurn();
-        if (translation) {
-          this.h.onTurn?.(transcript, translation);
-          if (++this.turns >= MAX_TURNS_PER_SESSION) {
-            log('Live: плановое обновление сессии (чистый контекст)');
-            this.turns = 0;
-            this.resumeHandle = null;
-            this._reconnect();
-          }
+        if (d?.mimeType?.startsWith('audio/pcm') && d.data) {
+          if (!this.audioAt) this.audioAt = Date.now();
+          this.h.onAudio?.(d.data);
         }
       }
+
+      if (sc.turnComplete) this._turnComplete();
     };
 
-    ws.onerror = () => log('Live: ошибка сокета');
+    ws.onerror = () => { if (this.ws === ws) log('Live: ошибка сокета'); };
     ws.onclose = (e) => {
       if (this.ws !== ws) return;
-      log(`Live: соединение закрыто (код ${e.code}${e.reason ? ', ' + e.reason : ''})`);
+      log(`Live: соединение закрыто (код ${e.code}${e.reason ? ', ' + e.reason : ''}${this.setupOk ? '' : ', до готовности'})`);
       this.ws = null;
       if (!this.shouldRun) return;
       // Неверный, просроченный или отозванный ключ: ни упрощённые настройки, ни
@@ -790,13 +910,27 @@ export class LiveSession {
         this.shouldRun = false;
         return;
       }
-      // Отказ ещё до готовности сессии — это не обрыв связи, а «так нельзя»:
-      // не принят setup, модель недоступна для ключа или исчерпана её квота.
-      // Сначала пробуем без тонких настроек, потом следующую модель.
-      const refused = !this.setupOk && [1002, 1007, 1008, 1011].includes(e.code);
-      const rejected = [1002, 1007, 1008].includes(e.code);
-      if (refused || rejected) {
-        if (this.useExtras && rejected) {
+      const serverRefusal = [1002, 1007, 1008, 1011].includes(e.code);
+      if (!this.setupOk && serverRefusal) {
+        // Возобновить не дали — сама сессия могла испортиться. Свежая без
+        // хэндла почти всегда открывается; модель и настройки тут ни при чём.
+        if (this.connResumed) {
+          log('Live: возобновить не дали — открываю свежую сессию');
+          this.resumeHandle = null;
+          this._reconnect();
+          return;
+        }
+        // Перегрузка — повод подождать, а не менять модель с первого раза.
+        if (e.code === 1011 && !this.retriedBusy) {
+          this.retriedBusy = true;
+          log('Live: сервер перегружен — повторю через пару секунд');
+          this._reconnect({ delay: 2000 });
+          return;
+        }
+        // Отказ ещё до готовности — это «так нельзя»: не принят setup, модель
+        // недоступна для ключа или исчерпана её квота. Сначала без тонких
+        // настроек, потом следующая модель.
+        if (this.useExtras && e.code !== 1011) {
           log(`Live: сервер отверг настройки${e.reason ? ' (' + e.reason.slice(0, 90) + ')' : ''}, переподключаюсь без них`);
           this.useExtras = false;
           this.attempts = 0;
@@ -807,29 +941,102 @@ export class LiveSession {
           this.modelIndex++;
           this.useExtras = true;
           this.attempts = 0;
+          this.retriedBusy = false;
+          // Хэндл привязан к прежней модели — запасной он чужой
+          this.resumeHandle = null;
           log(`Live: модель недоступна, перехожу на ${LIVE_MODELS[this.modelIndex].replace('models/', '')}`);
           this._reconnect();
           return;
         }
-        this.h.onError?.(`Live-сервис отверг запрос${e.reason ? ': ' + e.reason : '.'}`);
+        this.h.onError?.(liveRefusal(e.code, e.reason));
         this.shouldRun = false;
         return;
       }
+      // Обрыв посреди готовой сессии — даже с кодом 1007/1008 — это не отказ
+      // настроек: переподключаемся с прежними. Но сессию, которая так умерла
+      // (или возобновилась и умерла, не дав ни одной реплики), не возобновляем.
+      if (this.setupOk && (serverRefusal || (this.connResumed && !this.connTurns))) this.resumeHandle = null;
       this._reconnect();
     };
   }
 
-  _reconnect() {
-    if (!this.shouldRun) return;
-    try { this.ws?.close(); } catch {}
-    this.ws = null;
+  _turnComplete() {
+    const transcript = this.turnIn.trim();
+    // Оборванную реплику помечаем многоточием — видно, что фраза не целиком.
+    const out = this.turnOut.trim();
+    const translation = out + (this.cutOff && out ? '…' : '');
+    const delay = this.inAt && this.audioAt ? `, звук через ${((this.audioAt - this.inAt) / 1000).toFixed(1)} с` : '';
+    const cut = this.cutOff ? ', перебито' : '';
     this._resetTurn();
-    if (++this.attempts > 5) {
-      this.h.onError?.('Связь с Live-переводом потеряна. Включите режим заново.');
+    if (translation) {
+      this.turns++;
+      this.connTurns++;
+      this.attempts = 0;
+      log(`Live: ход ${this.turns}/${MAX_TURNS_PER_SESSION}: вход ${langOf(transcript)} ${transcript.length} зн. → ${langOf(translation)} ${translation.length} зн.${delay}${cut}`);
+      this.h.onTurn?.(transcript, translation);
+    } else if (transcript) {
+      log(`Live: вход ${langOf(transcript)} ${transcript.length} зн., перевода нет${cut}`);
+      this.h.onSilentTurn?.(transcript);
+    }
+    if (this.turns >= MAX_TURNS_PER_SESSION) {
+      log('Live: плановое обновление сессии (чистый контекст)');
+      this.turns = 0;
+      this.resumeHandle = null;
+      this._reconnect({ counted: false });
+    } else if (this.goAwayPending) {
+      log('Live: реплика закончилась — переподключаюсь по goAway');
+      this._reconnect({ counted: false });
+    }
+  }
+
+  /// Сервер предупреждает, что скоро закроет соединение. Рвать сразу — значит
+  /// оборвать реплику посередине: переподключаемся после хода, в тишине —
+  /// сразу, а не позже, чем за 2 с до срока.
+  _goAway(timeLeft) {
+    const m = /^([\d.]+)s$/.exec(timeLeft || '');
+    const left = m ? parseFloat(m[1]) * 1000 : 5000;
+    if (!this.turnIn && !this.turnOut && this.h.isQuiet?.() !== false) {
+      log(`Live: goAway (осталось ${Math.round(left / 1000)} с), сейчас тихо — переподключаюсь`);
+      this._reconnect({ counted: false });
+      return;
+    }
+    log(`Live: goAway, осталось ${Math.round(left / 1000)} с — переподключусь после реплики`);
+    this.goAwayPending = true;
+    clearTimeout(this.goAwayTimer);
+    this.goAwayTimer = setTimeout(() => {
+      if (!this.goAwayPending) return;
+      log('Live: goAway — время вышло, переподключаюсь');
+      this._reconnect({ counted: false });
+    }, Math.max(0, left - 2000));
+  }
+
+  /// counted — считать ли попытку: обрывы считаем, плановые обновления — нет.
+  _reconnect({ counted = true, delay } = {}) {
+    if (!this.shouldRun) return;
+    const old = this.ws;
+    this.ws = null;
+    try { old?.close(); } catch {}
+    this._clearTimers();
+    if (this.turnIn || this.turnOut) log('Live: реплика потеряна при переподключении');
+    this._resetTurn();
+    this.setupOk = false;
+    if (counted && ++this.attempts > 5) {
+      this.h.onError?.('Связь с живым переводом пропала. Включите волну снова — или говорите через микрофон: он работает отдельно.');
       this.shouldRun = false;
       return;
     }
     this.h.onState?.('reconnecting');
-    setTimeout(() => this._connect(), Math.min(400 * 2 ** (this.attempts - 1), 4000));
+    const wait = delay ?? (counted ? Math.min(400 * 2 ** (this.attempts - 1), 4000) : 150);
+    this.retryTimer = setTimeout(() => this._connect(), wait);
   }
+}
+
+/// Итог, когда не помогли ни упрощённые настройки, ни запасная модель: по-русски
+/// и с выходом — обычный микрофон работает через другой API.
+function liveRefusal(code, reason = '') {
+  if (/quota|exhaust|rate.?limit|429/i.test(reason)) {
+    return 'Живой перевод исчерпал бесплатную квоту. Говорите через микрофон — он работает отдельно.';
+  }
+  if (code === 1011) return 'Сервер живого перевода перегружен. Попробуйте через минуту — или говорите через микрофон.';
+  return 'Живой перевод сейчас недоступен. Говорите через микрофон — он работает отдельно.';
 }

@@ -60,16 +60,26 @@ function boot() {
     const has = e.target.value.trim().length > 0;
     $('sendBtn').classList.toggle('hidden', !has);
     $('micBtn').classList.toggle('hidden', has);
-    $('liveBtn').classList.toggle('hidden', has);
+    // Включённую волну должно быть чем выключить и во время набора
+    $('liveBtn').classList.toggle('hidden', has && !liveOn);
+    if (has) setTypingPause(true);
   });
+  $('textInput').addEventListener('focus', () => setTypingPause(true));
+  $('textInput').addEventListener('blur', () => { if (!$('textInput').value.trim()) setTypingPause(false); });
   $('textInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendText(); });
-  $('statusAction').addEventListener('click', () => { if (liveOn) stopLive(); else if (recording) cancelRecording(); });
+  $('statusAction').addEventListener('click', () => {
+    if (statusFn) { const fn = statusFn; setStatus(''); fn(); }
+    else if (liveOn) stopLive();
+    else if (recording) cancelRecording();
+  });
   $('newBtn').addEventListener('click', newSession);
   $('histBtn').addEventListener('click', () => openHistory('dialogs'));
   $('phrasesBtn').addEventListener('click', openPhrases);
   $('phrasesClose').addEventListener('click', () => $('phrases').classList.add('hidden'));
 
   addEventListener('online', updateNetworkState);
+  // Сеть вернулась — не ждём, пока отсчитается пауза между попытками
+  addEventListener('online', () => { if (liveOn && live && !live.ready) live.kick('сеть вернулась'); });
   addEventListener('offline', updateNetworkState);
   updateNetworkState();
   registerServiceWorker();
@@ -515,7 +525,7 @@ function renderFeed() {
     el.className = `msg ${m.sourceLanguage === 'ru' ? 'mine' : 'theirs'}${m.pending ? ' pending' : ''}`;
     const src = document.createElement('div');
     src.className = 'src';
-    src.textContent = m.transcript || 'живой перевод';
+    src.textContent = (m.transcript || 'живой перевод') + (m.via === 'text' ? ' · переведено текстом' : '');
     const tr = document.createElement('div');
     tr.className = 'tr';
     tr.textContent = m.translation;
@@ -536,11 +546,16 @@ function openBig(m) {
 }
 
 function contextSnippet() {
-  return messages.slice(-6).map(m => `[${m.sourceLanguage}] ${m.transcript} → ${m.translation}`).join('\n');
+  // Пары «оригинал = перевод» (неудачи, непереведённое) модели в пример не даём:
+  // это ровно тот повтор на своём языке, с которым боремся.
+  return messages.filter(m => !m.failed && m.translation && m.transcript !== m.translation).slice(-6).map(m => `[${m.sourceLanguage}] ${m.transcript} → ${m.translation}`).join('\n');
 }
 
-function setStatus(text, cls, actionLabel) {
+/// actionFn — что делает кнопка справа; без неё — выключает волну или запись.
+let statusFn = null;
+function setStatus(text, cls, actionLabel, actionFn) {
   const line = $('statusLine');
+  statusFn = actionFn || null;
   if (!text) { line.classList.add('hidden'); return; }
   line.className = `statusline ${cls || ''}`;
   $('statusText').textContent = text;
@@ -548,49 +563,125 @@ function setStatus(text, cls, actionLabel) {
   $('statusAction').classList.toggle('hidden', !actionLabel);
 }
 
-function showBanner(on, rec) {
+/// Статус «как в покое»: в волне — её состояние, иначе пусто.
+function idleStatus() {
+  if (liveOn) renderLive(); else setStatus('');
+}
+
+// Баннер читает собеседник — поэтому крупно по-вьетнамски, мелко по-русски.
+const BANNER = {
+  listen: ['Xin mời nói! • Говорите!', 'Nói tiếng Việt, máy dịch ngay • Я сразу переведу'],
+  wait: ['Chờ chút • Подождите', 'Đang dịch, nghe xong rồi nói tiếp • Идёт перевод — дослушайте'],
+  rec: ['Xin mời nói! • Говорите!', 'Nói xong, tôi sẽ dịch • Я переведу, когда закончите'],
+};
+
+/// mode: 'listen' — микрофон открыт и сессия слушает; 'wait' — звучит перевод,
+/// микрофон на паузе; 'rec' — запись фразы; false — спрятать.
+function showBanner(mode) {
   const b = $('speakBanner');
-  b.classList.toggle('on', on);
-  b.classList.toggle('rec', !!rec);
+  b.classList.toggle('on', !!mode);
+  b.classList.toggle('rec', mode === 'rec');
+  b.classList.toggle('wait', mode === 'wait');
+  if (!mode || b.dataset.mode === mode) return;
+  b.dataset.mode = mode;
+  const [big, small] = BANNER[mode];
+  b.textContent = big;
+  const s = document.createElement('small');
+  s.textContent = small;
+  b.appendChild(s);
 }
 
 // --- живой режим
 
+// Что сейчас с волной. Баннер зовёт говорить только тогда, когда сессия
+// действительно слушает и микрофон открыт: раньше он горел и во время
+// переподключения, и пока звучал перевод, — а сказанное в это время терялось.
+const liveUi = { conn: 'connecting', heard: false, micProblem: null };
+let typingPause = false;     // пишут текст — волна молчит и не переводит вслух
+let micStarting = false;     // идёт запуск микрофона — вторые нажатия не нужны
+let liveTimer = null;
+let lastLiveActivity = 0;
+let micFix = { stage: 0, at: 0 };
+let stallMark = { server: 0, loud: 0 };
+// Экран не гаснет, только пока идёт разговор; забытая волна сама выключится.
+const WAKE_HOLD_MS = 150_000;
+const LIVE_IDLE_STOP_MS = 300_000;
+
+function renderLive() {
+  if (!liveOn) return;
+  const speaking = modelSpeaking || ttsSpeaking;
+  const off = 'Выключить';
+  if (liveUi.micProblem) { setStatus(liveUi.micProblem, 'err', 'Перезапустить', restartLive); showBanner(false); return; }
+  if (typingPause) { setStatus('волна на паузе, пока вы пишете', 'busy', off); showBanner(false); return; }
+  if (speaking) { setStatus('перевожу вслух — микрофон на паузе', 'busy', off); showBanner('wait'); return; }
+  if (liveUi.conn === 'connecting') { setStatus('подключаюсь…', 'busy', off); showBanner(false); return; }
+  if (liveUi.conn === 'reconnecting') { setStatus('переподключаюсь…', 'busy', off); showBanner(false); return; }
+  if (liveUi.conn === 'slow') { setStatus('слабая связь — перевод запаздывает, надёжнее микрофон', 'busy', off); showBanner(false); return; }
+  if (liveUi.heard) { setStatus('слышу — переведу, когда договорите', 'live', off); showBanner('listen'); return; }
+  setStatus('слушаю: русский или вьетнамский', 'live', off);
+  showBanner('listen');
+}
+
 async function toggleLive() {
   if (liveOn) { stopLive(); return; }
-  if (recording) return;
+  if (recording || micStarting) return;
+  if (!navigator.onLine) {
+    setStatus('нет сети — живому переводу нужен интернет', 'err', 'Включить снова', toggleLive);
+    return;
+  }
 
+  micStarting = true;
   $('liveBtn').disabled = true;
+  $('micBtn').disabled = true;
   setStatus('подключаюсь…', 'busy');
   try {
     await mic.start();
   } catch (e) {
-    log(`микрофон отказ: ${e.name} — ${e.message}`);
-    setStatus('нет доступа к микрофону', 'err', null);
-    toast('Разрешите доступ к микрофону');
+    if (!e.cancelled) {
+      log(`микрофон отказ: ${e.name} — ${e.message}`);
+      setStatus('нет доступа к микрофону', 'err', null);
+      toast('Разрешите доступ к микрофону');
+    }
     $('liveBtn').disabled = false;
+    $('micBtn').disabled = false;
     return;
+  } finally {
+    micStarting = false;
   }
-
-  try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {}
 
   player.reset();
   speaker.stop();
   modelSpeaking = ttsSpeaking = false;
   mic.muted = false;
+  typingPause = false;
+  Object.assign(liveUi, { conn: 'connecting', heard: false, micProblem: null });
+  micFix = { stage: 0, at: 0 };
+  stallMark = { server: 0, loud: mic.loudFrames || 0 };
+  quietSince = performance.now();
 
   live = new LiveSession({
-    // Чтобы живой режим знал, о чём уже говорили — в том числе текстом.
-    getContext: () => messages.slice(-6),
     onTurn: handleLiveTurn,
+    onSilentTurn: handleSilentTurn,
+    onHeard: (on) => { liveUi.heard = on; if (on) liveActivity(); renderLive(); },
     onAudio: (b64) => player.enqueue(b64),
     onInterrupted: () => player.flush(),
     onState: (s) => {
-      if (s === 'listening') { setStatus('слушаю — говорите на любом языке', 'live'); showBanner(!mic.muted); }
-      else if (s === 'reconnecting') { setStatus('переподключаюсь…', 'busy'); showBanner(false); }
-      else if (s === 'connecting') setStatus('подключаюсь…', 'busy');
+      if (s === 'idle') return;
+      liveUi.conn = s;
+      if (s !== 'listening') liveUi.heard = false;
+      renderLive();
     },
-    onError: (msg) => { toast(msg); stopLive(); },
+    onError: (msg) => {
+      stopLive();
+      toast(msg);
+      // Тост исчезает за пару секунд, а человек смотрит на собеседника —
+      // причина остаётся в строке статуса вместе с кнопкой.
+      setStatus(msg, 'err', 'Включить снова', toggleLive);
+      haptic([30, 60, 30]);
+    },
+    // Тихо ли сейчас: goAway можно отработать сразу, никого не оборвав
+    isQuiet: () => !(modelSpeaking || ttsSpeaking) && performance.now() - (mic.lastLoudAt || 0) > 1500,
+    micInfo: () => mic.info(),
   });
   live.start();
   mic.onChunk = (b64) => live?.sendAudio(b64);
@@ -602,10 +693,17 @@ async function toggleLive() {
   $('liveBtn').disabled = false;
   $('liveBtn').classList.add('on');
   $('micBtn').disabled = true;
+  lastLiveActivity = 0;
+  liveActivity();
+  clearInterval(liveTimer);
+  liveTimer = setInterval(liveWatch, 1000);
+  renderLive();
 }
 
 function stopLive() {
   liveOn = false;
+  clearInterval(liveTimer);
+  liveTimer = null;
   keepAudioRunning(false);
   updateMicIndicator();
   live?.stop();
@@ -615,10 +713,109 @@ function stopLive() {
   player.reset();
   try { wakeLock?.release(); } catch {}
   wakeLock = null;
+  typingPause = false;
   $('liveBtn').classList.remove('on');
   $('micBtn').disabled = false;
   showBanner(false);
   setStatus('');
+}
+
+function restartLive() {
+  stopLive();
+  toggleLive();
+}
+
+/// Реплика, речь или текст — разговор идёт: держим экран и откладываем автостоп.
+function liveActivity() {
+  lastLiveActivity = Date.now();
+  if (liveOn && !wakeLock && !document.hidden && navigator.wakeLock) {
+    navigator.wakeLock.request('screen').then((l) => {
+      if (!liveOn) { l.release().catch(() => {}); return; }
+      wakeLock = l;
+      l.addEventListener?.('release', () => { if (wakeLock === l) wakeLock = null; });
+    }).catch(() => {});
+  }
+}
+
+/// Раз в секунду, пока включена волна: жив ли микрофон, не встала ли связь,
+/// не забыли ли волну включённой.
+function liveWatch() {
+  if (!liveOn) return;
+  const idle = Date.now() - lastLiveActivity;
+  if (idle > LIVE_IDLE_STOP_MS) {
+    log('волна: 5 минут без реплик — выключаю');
+    stopLive();
+    haptic([20, 60, 20]);
+    setStatus('Волна выключилась: 5 минут тишины', '', 'Включить снова', toggleLive);
+    return;
+  }
+  if (wakeLock && idle > WAKE_HOLD_MS) {
+    log('волна: 2,5 минуты без реплик — экран снова гаснет сам');
+    try { wakeLock.release(); } catch {}
+    wakeLock = null;
+  }
+
+  // Микрофон: кадры не идут или дорожку заглушила система (звонок, Siri,
+  // диктовка) — раньше это выглядело как «слушаю», а перевода не было.
+  if (mic.active && !micStarting) {
+    const now = performance.now();
+    const t = mic.stream?.getAudioTracks()[0];
+    const speaking = modelSpeaking || ttsSpeaking;
+    const zeroFor = now - Math.max(mic.lastSignalAt || 0, quietSince);
+    const noFrames = now - mic.lastFrameAt > 2500;
+    const dead = noFrames || t?.readyState === 'ended' || (!!t?.muted && !speaking && zeroFor > 3500);
+    if (dead) micTrouble(noFrames ? 'нет кадров' : t?.readyState === 'ended' ? 'дорожка закрыта' : 'дорожка заглушена', true);
+    // Ровный ноль без признака заглушки — подозрительно, но не повод пугать:
+    // одна мягкая попытка, без сообщения об ошибке.
+    else if (!speaking && zeroFor > 20000) micTrouble('ровный ноль 20 с', false);
+    else if (micFix.stage && now - (mic.lastSignalAt || 0) < 1500) {
+      log('микрофон снова слышит');
+      micFix = { stage: 0, at: 0 };
+      if (liveUi.micProblem) { liveUi.micProblem = null; renderLive(); }
+    }
+  }
+
+  // Связь: микрофон слышит речь, а сервер полминуты не отвечает ничем.
+  if (live?.ready && !mic.muted) {
+    if (live.lastServerAt !== stallMark.server) stallMark = { server: live.lastServerAt, loud: mic.loudFrames };
+    else if (Date.now() - live.lastServerAt > 30000 && mic.loudFrames - stallMark.loud > 40) {
+      stallMark = { server: live.lastServerAt, loud: mic.loudFrames };
+      live.kick('сервер молчит 30 с, хотя микрофон слышит речь');
+    }
+  }
+}
+
+/// canGiveUp — можно ли дойти до сообщения «микрофон отключила система».
+async function micTrouble(kind, canGiveUp) {
+  const now = performance.now();
+  if (now - micFix.at < 3000) return;   // даём прошлой попытке время
+  if (!canGiveUp && micFix.stage >= 2) return;
+  micFix.at = now;
+  if (micFix.stage === 0) {
+    micFix.stage = 1;
+    log(`микрофон молчит (${kind}): ${mic.info()} — возобновляю звук`);
+    try { await audioContext().resume(); } catch {}
+  } else if (micFix.stage === 1) {
+    micFix.stage = 2;
+    log(`микрофон молчит (${kind}) — перезапускаю захват`);
+    const onChunk = mic.onChunk;
+    mic.stop();
+    try {
+      await mic.start();
+      if (!liveOn) { mic.stop(); return; }
+      mic.onChunk = onChunk;
+      quietSince = performance.now();
+      refreshMicMute();
+    } catch (e) {
+      log(`микрофон: перезапуск не удался — ${e.name}`);
+    }
+  } else if (micFix.stage === 2) {
+    micFix.stage = 3;
+    log(`микрофон так и не ожил: ${mic.info()}`);
+    liveUi.micProblem = 'микрофон отключила система — нажмите «Перезапустить»';
+    renderLive();
+    haptic([30, 60, 30]);
+  }
 }
 
 /// Микрофон может слушать, когда открыта другая вкладка: статусная строка живёт
@@ -632,16 +829,30 @@ function updateMicIndicator() {
 // поэтому состояние сводим в одном месте.
 let modelSpeaking = false;
 let ttsSpeaking = false;
+// Когда динамик замолчал: эхоподавление глушит вход, пока он говорит, —
+// ровная тишина до этого момента не признак сломанного микрофона.
+let quietSince = 0;
 
 function refreshMicMute() {
   const busySpeaking = modelSpeaking || ttsSpeaking;
   const wasMuted = mic.muted;
-  mic.muted = busySpeaking;
+  mic.muted = busySpeaking || (liveOn && typingPause);
+  if (wasMuted && !busySpeaking) quietSince = performance.now();
   // Ровно на переходе «начали глушить» сообщаем серверу, что поток прервался:
   // под мьютом чанки выбрасываются, и без этого признака хвост речи склеится
   // с началом следующей реплики.
-  if (!wasMuted && busySpeaking && liveOn) live?.endAudioStream();
-  if (liveOn) showBanner(!busySpeaking);
+  if (!wasMuted && mic.muted && liveOn) live?.endAudioStream();
+  renderLive();
+}
+
+/// Пока пишут текст, волна на паузе: иначе она переводит вслух всё, что
+/// говорят рядом, а диктовка с клавиатуры прозвучала бы дважды.
+function setTypingPause(on) {
+  if (typingPause === on) return;
+  typingPause = on;
+  if (!liveOn) return;
+  log(on ? 'волна: пауза — пишут текст' : 'волна: пауза снята');
+  refreshMicMute();
 }
 
 function onModelSpeaking(speaking) {
@@ -662,7 +873,19 @@ speaker.onSpeakingChange = (speaking) => {
 // мусор, поэтому допускаем до трёх повторений и ничего кроме них.
 const LANGUAGE_NAME_ONLY = /^((vietnamese|tiếng việt|spanish|español|english|russian|русский|вьетнамский|испанский|английский)[\s,.!?…]*){1,3}$/i;
 
+const wordsOf = (t) => t.toLowerCase().normalize('NFC').split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+
+/// Доля общих слов: настоящий дрейф — это повтор фразы на её же языке.
+function overlap(a, b) {
+  const A = new Set(wordsOf(a)), B = new Set(wordsOf(b));
+  if (!A.size || !B.size) return 0;
+  let n = 0;
+  for (const w of A) if (B.has(w)) n++;
+  return n / Math.min(A.size, B.size);
+}
+
 function handleLiveTurn(transcript, translation) {
+  liveActivity();
   const text = translation.trim();
   if (!text) return;
   if (LANGUAGE_NAME_ONLY.test(text) || (transcript && LANGUAGE_NAME_ONLY.test(transcript.trim()))) {
@@ -672,10 +895,22 @@ function handleLiveTurn(transcript, translation) {
   const translationIsRu = isMostlyCyrillic(text);
   const transcriptIsRu = transcript ? isMostlyCyrillic(transcript) : !translationIsRu;
 
-  // Дрейф модели: «перевод» на языке оригинала — чиним через REST.
   if (transcript && transcriptIsRu === translationIsRu) {
-    log('дрейф: перевод на языке оригинала, отправляю в REST');
-    repairTurn(transcript);
+    // Дрейф модели — «перевод» повторяет фразу на её же языке: чиним через REST.
+    // Короткое «Dạ» распознаватель пишет кириллицей «Да», и верный перевод «Да»
+    // выглядит так же, — поэтому короткие реплики не трогаем.
+    if (wordsOf(transcript).length >= 3 && overlap(transcript, text) > 0.5) {
+      log('дрейф: перевод повторяет реплику, отправляю в REST');
+      repairTurn(transcript);
+      return;
+    }
+    // Не повтор: транскрипт опоздал или записан не тем алфавитом. Перевод
+    // верим, а транскрипт парой к нему не показываем — он от другой реплики.
+    log('Live: транскрипт и перевод на одном языке, но это не повтор — оставляю перевод');
+    addMessage({
+      id: crypto.randomUUID(), ts: Date.now(),
+      sourceLanguage: translationIsRu ? 'vi' : 'ru', transcript: '', translation: text,
+    });
     return;
   }
   addMessage({
@@ -685,20 +920,41 @@ function handleLiveTurn(transcript, translation) {
   });
 }
 
+/// Модель промолчала, хотя распознаватель услышал связную фразу (шумный
+/// рынок, цена): переводим распознанное текстом — молчание без следа хуже.
+function handleSilentTurn(transcript) {
+  liveActivity();
+  const t = transcript.trim();
+  if (wordsOf(t).length < 3 || LANGUAGE_NAME_ONLY.test(t)) return;
+  const hasCyr = /[а-яё]/i.test(t), hasLat = /[a-z]/i.test(t.normalize('NFD'));
+  if (hasCyr && hasLat) return;   // смесь алфавитов — скорее мусор распознавателя
+  log('Live: модель промолчала — перевожу распознанное текстом');
+  repairTurn(t);
+}
+
+/// Перевод реплики волны через обычный текстовый перевод.
 async function repairTurn(transcript) {
+  const fail = (why) => {
+    log(`волна: перевод текстом не удался — ${why}`);
+    addFailure(`Не удалось перевести: «${transcript.length > 90 ? transcript.slice(0, 90) + '…' : transcript}»`,
+      () => gemini.translateText(transcript, contextSnippet()), 'Повторить перевод');
+  };
   try {
     const r = await gemini.translateText(transcript, contextSnippet());
-    addMessage({ id: crypto.randomUUID(), ts: Date.now(), sourceLanguage: r.sourceLanguage, transcript: r.transcript, translation: r.translation });
-    if (r.sourceLanguage === 'ru') speaker.speak(r.translation, 'vi-VN');
+    const translation = (r.translation || '').trim();
+    if (!translation) { fail('пустой ответ'); return; }
+    addMessage({ id: crypto.randomUUID(), ts: Date.now(), sourceLanguage: r.sourceLanguage, transcript: r.transcript || transcript, translation, via: 'text' });
+    if (r.sourceLanguage === 'ru') speaker.speak(translation, 'vi-VN');
   } catch (e) {
-    addMessage({ id: crypto.randomUUID(), ts: Date.now(), sourceLanguage: isMostlyCyrillic(transcript) ? 'ru' : 'vi', transcript, translation: transcript });
+    // Раньше в ленту молча ложился оригинал под видом перевода.
+    fail(e.message);
   }
 }
 
 // --- запись фразы (обычный режим)
 
 async function toggleRecording() {
-  if (liveOn) return;
+  if (liveOn || micStarting) return;
   if (recording) {
     haptic(14);
     recording = false;
@@ -715,11 +971,16 @@ async function toggleRecording() {
     await translateAndAdd(again, again, 'Повторить — запись сохранена');
     return;
   }
+  micStarting = true;
+  $('liveBtn').disabled = true;
   try {
     await mic.start();
   } catch (e) {
-    toast('Разрешите доступ к микрофону');
+    if (!e.cancelled) toast('Разрешите доступ к микрофону');
     return;
+  } finally {
+    micStarting = false;
+    $('liveBtn').disabled = false;
   }
   mic.startRecording();
   haptic(14);
@@ -727,7 +988,7 @@ async function toggleRecording() {
   updateMicIndicator();
   $('micBtn').classList.add('rec');
   $('micBtn').innerHTML = iconSVG('stop', 24);
-  showBanner(true, true);
+  showBanner('rec');
   setStatus('идёт запись — нажмите ещё раз, когда закончите', '', 'Отмена');
 }
 
@@ -750,6 +1011,8 @@ async function sendText() {
   $('sendBtn').classList.add('hidden');
   $('micBtn').classList.remove('hidden');
   $('liveBtn').classList.remove('hidden');
+  setTypingPause(false);
+  if (liveOn) liveActivity();
   const again = () => gemini.translateText(text, contextSnippet());
   await translateAndAdd(again, again, 'Повторить перевод');
 }
@@ -773,9 +1036,9 @@ async function translateAndAdd(fn, retry, retryLabel) {
       addMessage({ id: crypto.randomUUID(), ts: Date.now(), sourceLanguage: r.sourceLanguage, transcript: r.transcript, translation });
       if (r.sourceLanguage === 'ru') speaker.speak(translation, 'vi-VN');
     }
-    setStatus('');
+    idleStatus();
   } catch (e) {
-    setStatus('');
+    idleStatus();
     log(`перевод не удался: ${e.message}`);
     // Тост исчезает через секунду, а человек стоит перед собеседником с пустым
     // экраном. Неудача остаётся в ленте — вместе с кнопкой повтора той же записи.
@@ -827,6 +1090,8 @@ function newSession() {
   store.archiveCurrent();
   messages = [];
   renderFeed();
+  // Модель волны помнит прошлого собеседника — новому разговору нужна чистая сессия
+  if (liveOn) live?.fresh();
   toast('Разговор сохранён в историю');
 }
 
@@ -1305,7 +1570,7 @@ function openHistory(seg) {
         () => { store.removeSession(s.id); openHistory('dialogs'); },
         () => {
           const restored = store.resumeSession(s.id);
-          if (restored) { messages = restored; renderFeed(); $('history').classList.add('hidden'); switchTab('dialog'); toast('Разговор продолжен'); }
+          if (restored) { messages = restored; renderFeed(); if (liveOn) live?.fresh(); $('history').classList.add('hidden'); switchTab('dialog'); toast('Разговор продолжен'); }
         }
       );
       el.querySelector('b').textContent = title;

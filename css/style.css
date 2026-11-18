@@ -153,6 +153,8 @@ select {
 .banner small { display: block; font-size: 13px; font-weight: 600; opacity: .92; margin-top: 3px; }
 .banner.on { display: block; }
 .banner.rec { background: linear-gradient(135deg, var(--red), #d32b22); }
+/* Звучит перевод — микрофон на паузе: «подождите», а не «говорите» */
+.banner.wait { background: linear-gradient(135deg, var(--orange), #e58a00); }
 
 /* Статус */
 .statusline {

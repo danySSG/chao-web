@@ -4,6 +4,8 @@ import { bytesToBase64, base64ToBytes, log } from './util.js?v=202611181632';
 
 const IN_RATE = 16000;
 const OUT_RATE = 24000;
+// Пик выше этого — похоже на речь рядом с телефоном, а не на фон
+const LOUD = 0.15;
 
 let ctx = null;
 
@@ -34,6 +36,14 @@ export function keepAudioRunning(on) {
 /// Звуковая сессия iOS. Стоит хоть раз включить микрофон — iOS переводит её
 /// в режим «звонок», и любой звук (озвучка карточки!) идёт в разговорный
 /// динамик у уха. Пока микрофон не нужен, возвращаем обычное воспроизведение.
+// Аудиосессия iOS меняет состояние при звонке, Siri, диктовке — в журнал,
+// чтобы «волна молчит» можно было связать с причиной.
+try {
+  if (navigator.audioSession && 'onstatechange' in navigator.audioSession) {
+    navigator.audioSession.onstatechange = () => log(`звук: аудиосессия ${navigator.audioSession.state}`);
+  }
+} catch {}
+
 export function setAudioMode(recording) {
   try {
     if (navigator.audioSession) navigator.audioSession.type = recording ? 'play-and-record' : 'playback';
@@ -90,35 +100,85 @@ export class Microphone {
 
   get active() { return !!this.processor; }
 
-  async start() {
-    if (this.processor) return;
+  /// Повторный вызов во время запуска ждёт тот же запуск: иначе второй тап
+  /// (или «волна» и сразу микрофон) захватывал микрофон дважды, и лишний
+  /// захват жил до перезагрузки — с оранжевой точкой iOS после «Выключить».
+  start() {
+    if (this.processor) return Promise.resolve();
+    if (!this._starting) this._starting = this._start().finally(() => { this._starting = null; });
+    return this._starting;
+  }
+
+  async _start() {
+    const gen = this.gen = (this.gen || 0) + 1;
     setAudioMode(true);
-    this.stream = await navigator.mediaDevices.getUserMedia({
+    const stream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
     });
-    const ac = audioContext();
-    await ac.resume();
-    log(`микрофон: ${ac.sampleRate} Гц, состояние ${ac.state}`);
+    // Пока ждали разрешение, микрофон уже выключили — захват сразу отпускаем
+    if (gen !== this.gen) {
+      stream.getTracks().forEach(t => t.stop());
+      throw Object.assign(new Error('запуск микрофона отменён'), { cancelled: true });
+    }
+    this.stream = stream;
+    try {
+      const ac = audioContext();
+      await ac.resume();
+      if (gen !== this.gen) throw Object.assign(new Error('запуск микрофона отменён'), { cancelled: true });
+      log(`микрофон: ${ac.sampleRate} Гц, состояние ${ac.state}`);
 
-    this.source = ac.createMediaStreamSource(this.stream);
-    this.processor = ac.createScriptProcessor(4096, 1, 1);
-    this.processor.onaudioprocess = (e) => {
-      const pcm = floatToPCM16(downsample(e.inputBuffer.getChannelData(0), ac.sampleRate));
-      if (this.recording) this.recording.push(pcm);
-      if (!this.muted && this.onChunk) this.onChunk(bytesToBase64(new Uint8Array(pcm.buffer)));
-    };
-    // Глушим выход процессора, иначе микрофон уйдёт в динамик.
-    const silent = ac.createGain();
-    silent.gain.value = 0;
-    this.source.connect(this.processor);
-    this.processor.connect(silent);
-    silent.connect(ac.destination);
+      // Звонок, Siri, диктовка могут заглушить дорожку молча: страница
+      // продолжает получать тишину. Хотя бы видно в журнале.
+      const track = stream.getAudioTracks()[0];
+      if (track) {
+        track.onmute = () => log('микрофон: дорожку заглушила система');
+        track.onunmute = () => log('микрофон: дорожка снова звучит');
+        track.onended = () => log('микрофон: дорожку закрыла система');
+      }
+      this.lastFrameAt = performance.now();
+      this.lastSignalAt = 0;
+      this.loudFrames = 0;
+
+      this.source = ac.createMediaStreamSource(stream);
+      this.processor = ac.createScriptProcessor(4096, 1, 1);
+      this.processor.onaudioprocess = (e) => {
+        const data = e.inputBuffer.getChannelData(0);
+        // Для сторожа «волны»: идут ли кадры вообще и есть ли в них хоть что-то
+        // (заглушённая системой дорожка отдаёт ровный ноль).
+        const now = performance.now();
+        this.lastFrameAt = now;
+        let peak = 0;
+        for (let i = 0; i < data.length; i += 8) { const v = data[i] < 0 ? -data[i] : data[i]; if (v > peak) peak = v; }
+        if (peak > 0) this.lastSignalAt = now;
+        if (peak > LOUD) { this.loudFrames++; this.lastLoudAt = now; }
+        const pcm = floatToPCM16(downsample(data, ac.sampleRate));
+        if (this.recording) this.recording.push(pcm);
+        if (!this.muted && this.onChunk) this.onChunk(bytesToBase64(new Uint8Array(pcm.buffer)));
+      };
+      // Глушим выход процессора, иначе микрофон уйдёт в динамик.
+      const silent = ac.createGain();
+      silent.gain.value = 0;
+      this.source.connect(this.processor);
+      this.processor.connect(silent);
+      silent.connect(ac.destination);
+    } catch (e) {
+      this.stop();
+      throw e;
+    }
+  }
+
+  /// Одна строка для журнала: что с дорожкой и звуком, без содержания речи.
+  info() {
+    const t = this.stream?.getAudioTracks()[0];
+    const age = this.lastFrameAt ? Math.round(performance.now() - this.lastFrameAt) : '—';
+    return `микрофон ${t ? `${t.readyState}${t.muted ? ', заглушён системой' : ''}` : 'выключен'}, звук ${ctx?.state || '—'}, кадр ${age} мс назад`;
   }
 
   stop() {
+    this.gen = (this.gen || 0) + 1;
     try { if (this.processor) { this.processor.onaudioprocess = null; this.processor.disconnect(); } } catch {}
     try { this.source?.disconnect(); } catch {}
-    try { this.stream?.getTracks().forEach(t => t.stop()); } catch {}
+    try { this.stream?.getTracks().forEach(t => { t.onmute = t.onunmute = t.onended = null; t.stop(); }); } catch {}
     this.processor = this.source = this.stream = null;
     this.recording = null;
     this.muted = false;
