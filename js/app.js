@@ -570,9 +570,9 @@ function idleStatus() {
 
 // Баннер читает собеседник — поэтому крупно по-вьетнамски, мелко по-русски.
 const BANNER = {
-  listen: ['Xin mời nói! • Говорите!', 'Nói tiếng Việt, máy dịch ngay • Я сразу переведу'],
-  wait: ['Chờ chút • Подождите', 'Đang dịch, nghe xong rồi nói tiếp • Идёт перевод — дослушайте'],
-  rec: ['Xin mời nói! • Говорите!', 'Nói xong, tôi sẽ dịch • Я переведу, когда закончите'],
+  listen: ['Xin mời nói! • Говорите!', 'Nói tiếng Việt, máy sẽ dịch • Я сразу переведу'],
+  wait: ['Xin chờ chút • Подождите', 'Đang dịch, xin nghe xong đã • Идёт перевод — дослушайте'],
+  rec: ['Xin mời nói! • Говорите!', 'Nói xong, máy sẽ dịch • Я переведу, когда закончите'],
 };
 
 /// mode: 'listen' — микрофон открыт и сессия слушает; 'wait' — звучит перевод,
