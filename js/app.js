@@ -8,6 +8,11 @@ import { iconSVG, renderIcons } from './icons.js?v=202611181805';
 import { PHRASES, EXPLAIN } from './phrases.js?v=202611181805';
 import { studioIllustration, shareIllustration, addHomeIllustration, androidInstallIllustration, featuresIllustration } from './illustrations.js?v=202611181805';
 
+// Копия на GitHub Pages — старый вход: учёт установок и обещания о приватности
+// там не действуют. Ведём на рабочий адрес (раньше это делал скрипт в <head>,
+// но встроенные скрипты теперь запрещены политикой безопасности).
+if (location.hostname.endsWith('github.io')) location.replace('https://chao.svoivietnam.com/');
+
 const $ = (id) => document.getElementById(id);
 const VERSION = '202611181805';
 
@@ -361,7 +366,7 @@ function openPhrases() {
       el.innerHTML = `<span class="ph-ru"></span><span class="ph-vi" lang="vi"></span>`;
       el.querySelector('.ph-ru').textContent = c.ru;
       el.querySelector('.ph-vi').textContent = c.vi;
-      el.addEventListener('click', () => usePhrase(c.ru, c.vi));
+      el.addEventListener('click', () => usePhrase(c.ru, c.vi, true));
       const del = document.createElement('button');
       del.className = 'ph-del';
       del.setAttribute('aria-label', 'Убрать из моих фраз');
@@ -386,7 +391,7 @@ function openPhrases() {
       el.innerHTML = `<span class="ph-ru"></span><span class="ph-vi" lang="vi"></span><span class="ph-speak" data-icon="speaker" data-icon-size="18"></span>`;
       el.querySelector('.ph-ru').textContent = ru;
       el.querySelector('.ph-vi').textContent = vi;
-      el.addEventListener('click', () => usePhrase(ru, vi));
+      el.addEventListener('click', () => usePhrase(ru, vi, true));
       box.appendChild(el);
     }
   }
@@ -395,11 +400,16 @@ function openPhrases() {
 }
 
 /** Фраза из разговорника: озвучиваем, кладём в ленту и открываем крупно. */
-function usePhrase(ru, vi) {
+/// fromBook — фраза из разговорника: после показа вернём туда же, на то же
+/// место списка. На рынке фразы идут подряд: «здравствуйте» → «сколько» → «дешевле».
+let phrasesReturn = null;
+
+function usePhrase(ru, vi, fromBook = false) {
   haptic(12);
   speaker.speak(vi, 'vi-VN');
   const message = { id: crypto.randomUUID(), ts: Date.now(), sourceLanguage: 'ru', transcript: ru, translation: vi };
   addMessage(message);
+  phrasesReturn = fromBook ? $('phrasesContent').scrollTop : null;
   $('phrases').classList.add('hidden');
   openBig(message);
 }
@@ -452,6 +462,8 @@ function initOnboarding() {
   $('obNext').addEventListener('click', obNext);
   $('obBack').addEventListener('click', () => goStep(obStep - 1));
   $('obPaste').addEventListener('click', pasteKey);
+  // Разговорник не нуждается ни в ключе, ни в сети — мастер это обещает, пусть и даёт
+  $('obPhrases').addEventListener('click', openPhrases);
   for (const ev of ['input', 'change', 'paste']) {
     $('obKey').addEventListener(ev, () => setTimeout(updateObNav, 0));
   }
@@ -833,6 +845,12 @@ function showBig() {
 function closeBig() {
   $('bigView').classList.add('hidden');
   releaseScreen('big');
+  if (phrasesReturn !== null) {
+    const top = phrasesReturn;
+    phrasesReturn = null;
+    openPhrases();
+    $('phrasesContent').scrollTop = top;
+  }
 }
 
 /// Размер текста под объём: короткое «Không đá» — видно издалека, длинный
@@ -1267,6 +1285,8 @@ async function repairTurn(transcript) {
 
 // --- запись фразы (обычный режим)
 
+let recTimer = null;
+
 async function toggleRecording() {
   if (liveOn || micStarting) return;
   if (recording) {
@@ -1278,6 +1298,7 @@ async function toggleRecording() {
     $('cancelRecBtn').classList.add('hidden');
     $('liveBtn').classList.remove('hidden');
     showBanner(false);
+    clearTimeout(recTimer);
     const wav = mic.stopRecording();
     mic.stop();
     keepAudioRunning(false);
@@ -1308,6 +1329,9 @@ async function toggleRecording() {
   holdScreen('rec');
   haptic(14);
   recording = true;
+  // Забытая или бесконечная запись — минута звука и так идёт по сети долго
+  clearTimeout(recTimer);
+  recTimer = setTimeout(() => { if (recording) { toast('Минута записи — отправляю'); toggleRecording(); } }, 60000);
   updateMicIndicator();
   $('micBtn').classList.add('rec');
   $('micBtn').innerHTML = iconSVG('stop', 24);
@@ -1321,6 +1345,7 @@ function cancelRecording() {
   if (!recording) return;
   recording = false;
   updateMicIndicator();
+  clearTimeout(recTimer);
   mic.stopRecording();
   mic.stop();
   keepAudioRunning(false);
@@ -1353,10 +1378,20 @@ async function translateAndAdd(fn, retry, retryLabel, detail) {
   $('sendBtn').disabled = true;
   $('micBtn').disabled = true;
   showTyping(true);
-  // Если ответ подзатянулся — честно говорим об этом, чтобы не казалось, что зависло
-  const slowTimer = setTimeout(() => setStatus('модель думает дольше обычного…', 'busy', null), 6000);
+  // Если ответ подзатянулся — честно говорим об этом и даём отменить: на
+  // плохой сети ждать можно до минуты, а собеседник стоит рядом.
+  let cancel;
+  const cancelled = new Promise(r => { cancel = r; });
+  const slowTimer = setTimeout(() => setStatus('модель думает дольше обычного…', 'busy', 'Отмена', () => cancel('cancel')), 6000);
   try {
-    const r = await fn();
+    const r = await Promise.race([fn(), cancelled]);
+    if (r === 'cancel') {
+      log('перевод отменён');
+      // Запись или текст остаются — повторить можно с карточки
+      addFailure('Перевод отменён.', retry, retryLabel, detail);
+      idleStatus();
+      return;
+    }
     const translation = (r.translation || '').trim();
     if (!translation) {
       // Пустой перевод — тоже неудача: пустой пузырь в ленте ничем не лучше молчания.
@@ -1593,10 +1628,16 @@ function resetPhoto(announce) {
 
 /// doc — свой документ, а не текущий: пока сжималось превью, могли нажать
 /// «Новый снимок», и номер записи ушёл бы в чужой документ.
+/// Меню сохраняется само. Документ — только по кнопке: в договорах, счетах и
+/// справках бывают имена и номера, и сами по себе они оседать не должны.
 async function savePhotoToHistory(doc = photo) {
   const result = mergedResult(doc);
   const first = doc.pages.find(p => p.result);
   if (!result || !first) return;
+  if (!result.isMenu && !doc.keep) {
+    if (doc.historyId) { store.removePhoto(doc.historyId); doc.historyId = null; }
+    return;
+  }
   try {
     // Для истории — маленькое превью, чтобы не выесть хранилище.
     const blob = await (await fetch(first.dataUrl)).blob();
@@ -1707,7 +1748,7 @@ async function savePhotoDoc() {
   const data = {
     ts: Date.now(), historyId: doc.historyId,
     pages: pages.map(p => ({ result: p.result, thumb: p.thumb })),
-    order: [...doc.order], chat: doc.chat.filter(m => !m.failed),
+    order: [...doc.order], chat: doc.chat.filter(m => !m.failed), keep: !!doc.keep,
   };
   try { localStorage.setItem(PHOTO_KEY, JSON.stringify(data)); }
   catch { log('фото: не хватило места сохранить текущий снимок'); }
@@ -1733,6 +1774,7 @@ function restorePhotoDoc() {
   photo.pages = d.pages.map(p => restoredPage(p.result, p.thumb));
   photo.order = new Map(d.order || []);
   photo.chat = d.chat || [];
+  photo.keep = !!d.keep;
   log(`фото: восстановлен снимок — ${plural(photo.pages.length, 'страница', 'страницы', 'страниц')}, в заказе ${photo.order.size}`);
 }
 
@@ -1741,6 +1783,7 @@ function openPhotoFromHistory(p) {
   photoEpoch++;   // пачка, которая ещё сжимается, в этот документ не попадёт
   photo = newPhotoDoc();
   photo.historyId = p.id;
+  photo.keep = true;   // он уже в истории
   photo.pages = [restoredPage(p.result, p.thumb)];
   $('photoAsk').value = '';
   $('history').classList.add('hidden');
@@ -1804,6 +1847,18 @@ function renderPhoto({ toChat = false, fromDish = false } = {}) {
     box.insertAdjacentHTML('beforeend', renderResultHTML(result, true));
     bindDishHandlers(box);
     updateOrderBar();  // после перерисовки блюд счётчик мог измениться
+    if (!result.isMenu && !busy) {
+      box.insertAdjacentHTML('beforeend', photo.keep
+        ? `<div class="page-failed">Документ сохранён в истории.</div>`
+        : `<div class="page-failed">Документы сами в историю не сохраняются — в них бывают имена и номера.
+           <button class="linkish" id="keepDoc">Сохранить</button></div>`);
+      box.querySelector('#keepDoc')?.addEventListener('click', async () => {
+        photo.keep = true;
+        await savePhotoToHistory(photo);
+        toast('Документ сохранён в истории');
+        renderPhoto();
+      });
+    }
   } else if (!busy && failed.length) {
     box.insertAdjacentHTML('beforeend',
       `<div class="error">${escapeHtml(failed[0].error)}</div>
@@ -1950,6 +2005,19 @@ function updatePhotoBar() {
   $('photoAsk').disabled = photo.asking;
 }
 
+/// «45.000đ», «45k», «45 000 ₫» → 45000. Цена за кг, диапазон, размеры,
+/// «по рыночной цене» — null: такое не складывается.
+function priceValue(price) {
+  const p = (price || '').trim().toLowerCase();
+  const m = /^(\d{1,3}(?:[.,\s\u00a0]\d{3})+|\d+)\s*(k|đ|₫|vnd|vnđ|d)?$/.exec(p);
+  if (!m) return null;
+  const n = Number(m[1].replace(/[.,\s\u00a0]/g, ''));
+  if (!n) return null;
+  return m[2] === 'k' ? n * 1000 : n < 1000 ? n * 1000 : n;
+}
+
+const fmtDong = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+
 function showOrder() {
   const items = [];
   // Одно и то же блюдо встречается дважды (блок «Best seller», перекрытие
@@ -1970,9 +2038,18 @@ function showOrder() {
     `<div class="big-item">${i.n} × ${escapeHtml(i.dish.original)}
       <div class="big-sub" lang="ru">${escapeHtml(i.dish.translation)}${i.dish.price ? ' · ' + escapeHtml(i.dish.price) : ''}</div>
     </div>`).join('');
+  // Итог по ценам меню: официант всё равно считает, а человеку важно знать
+  // заранее. Цены за кг, «по рыночной» и с размерами не складываем — честно пишем.
+  const priced = items.map(i => ({ ...i, v: priceValue(i.dish.price) }));
+  const sum = priced.reduce((a, i) => a + (i.v ? i.v * i.n : 0), 0);
+  const skipped = priced.filter(i => !i.v).length;
+  if (sum) {
+    $('bigTr').insertAdjacentHTML('beforeend', `<div class="big-item big-total">Tổng: ${fmtDong(sum)}đ
+      <div class="big-sub" lang="ru">итого по ценам меню${skipped ? ` · без ${plural(skipped, 'позиции', 'позиций', 'позиций')} по весу или без цены` : ''}</div></div>`);
+  }
   const phrase = 'Cho tôi ' + items.map(i => `${i.n} ${i.dish.original}`).join(', ');
   $('bigSpeak').onclick = () => speaker.speak(phrase, 'vi-VN');
-  bigText = 'Cho tôi gọi món:\n' + items.map(i => `${i.n} × ${i.dish.original}`).join('\n');
+  bigText = 'Cho tôi gọi món:\n' + items.map(i => `${i.n} × ${i.dish.original}`).join('\n') + (sum ? `\nTổng: ${fmtDong(sum)}đ` : '');
   setStar(null);
   showBig();
 }
@@ -1999,7 +2076,7 @@ function openHistory(seg) {
       const el = swipeRow(
         `<div class="info"><b></b><small>${fmtDate(s.startedAt)} · ${plural(s.messages.length, 'реплика', 'реплики', 'реплик')}</small>
          <span class="preview"></span></div>`,
-        () => { store.removeSession(s.id); openHistory('dialogs'); },
+        () => { store.deleteSession(s.id); openHistory('dialogs'); },
         () => {
           if (busy || recording) { toast('Дождитесь перевода — он ещё идёт'); return; }
           const restored = store.resumeSession(s.id);

@@ -125,6 +125,21 @@ export const store = {
   removeSession(id) {
     write(K_SESSIONS, this.getSessions().filter(s => s.id !== id));
   },
+  /// Удаление по просьбе человека: вместе с разговором уходят и его фразы
+  /// из кэша переводов — иначе «удалённое» оставалось бы на телефоне.
+  deleteSession(id) {
+    const s = this.getSessions().find(x => x.id === id);
+    if (s) {
+      const cache = read(K_TRCACHE, {});
+      let changed = false;
+      for (const m of s.messages || []) {
+        const k = (m.transcript || '').trim().toLowerCase();
+        if (k && k in cache) { delete cache[k]; changed = true; }
+      }
+      if (changed) write(K_TRCACHE, cache);
+    }
+    this.removeSession(id);
+  },
   /// null — разговора нет или текущий некуда сохранить (тогда его не трогаем).
   resumeSession(id) {
     const s = this.getSessions().find(x => x.id === id);
