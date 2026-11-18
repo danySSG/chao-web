@@ -45,24 +45,40 @@ self.addEventListener('fetch', (e) => {
   // Чужие домены (Gemini API) — только сеть, никогда не кэшируем
   if (url.origin !== self.location.origin) return;
 
-  // Проверка версии — только сеть, иначе обновления не будут находиться
-  if (url.pathname.endsWith('version.json')) {
-    e.respondWith(fetch(e.request).catch(() => new Response('{"version":"offline"}', {
-      headers: { 'Content-Type': 'application/json' },
-    })));
-    return;
-  }
+  // Проверка версии идёт мимо SW, прямо в сеть: без сети она должна честно
+  // упасть. Подставной ответ приложение принимало за новую версию.
+  if (url.pathname.endsWith('version.json')) return;
 
-  // Навигация: сначала сеть (свежая версия), при её отсутствии — кэш
+  // Навигация: свежая страница из сети, но ждём её недолго — при «сеть есть,
+  // данных нет» fetch висит до минуты, хотя оболочка лежит в кэше.
   if (e.request.mode === 'navigate') {
+    const network = fetch(e.request);
+    // В кэш — только удачный ответ и только сама оболочка: страница ошибки
+    // сервера не должна стать офлайн-версией. Ответ, пришедший после таймера,
+    // тоже сохраняем — пригодится при следующем запуске.
+    const isShell = url.pathname.endsWith('/') || url.pathname.endsWith('/index.html');
+    e.waitUntil(network.then(async (fresh) => {
+      if (!fresh.ok || !isShell) return;
+      const copy = fresh.clone(), probe = fresh.clone();
+      // И только страницу своей сборки: страница новой ссылается на модули,
+      // которых в этом кэше нет, — без сети открылся бы пустой экран.
+      if (!(await probe.text()).includes(`?v=${VERSION}`)) return;
+      return (await caches.open(CACHE)).put('./index.html', copy);
+    }).catch(() => {}));
     e.respondWith((async () => {
+      const cached = await caches.match('./index.html');
+      // Первый запуск: в кэше ничего нет — ждём сеть сколько потребуется
+      if (!cached) return network.catch(() => Response.error());
+      // ?v= с чужой версией — перезагрузка ради обновления: нужна именно новая
+      // страница. Своя версия (адрес остаётся и после обновления) — она уже в кэше.
+      const v = url.searchParams.get('v');
+      const wait = v && v !== VERSION ? 20000 : 2500;
+      const timer = new Promise((r) => setTimeout(r, wait, null));
       try {
-        const fresh = await fetch(e.request);
-        const cache = await caches.open(CACHE);
-        cache.put('./index.html', fresh.clone());
-        return fresh;
+        const fresh = await Promise.race([network, timer]);
+        return fresh && (fresh.ok || fresh.type === 'opaqueredirect') ? fresh : cached;
       } catch {
-        return (await caches.match('./index.html')) || Response.error();
+        return cached;
       }
     })());
     return;

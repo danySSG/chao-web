@@ -70,6 +70,7 @@ function boot() {
   addEventListener('offline', updateNetworkState);
   updateNetworkState();
   registerServiceWorker();
+  requestPersistentStorage();
 
   // фото
   $('cameraBtn').addEventListener('click', () => $('fileCamera').click());
@@ -145,25 +146,94 @@ function usageParams() {
   }).toString();
 }
 
+// Метка «перезагружались ради версии X тогда-то» переживает саму перезагрузку.
+// Если после неё версия осталась старой (страница пришла из кэша), сразу ещё раз
+// не перезагружаемся — иначе петля.
+const RELOAD_MARK = 'chao.updateReload';
+const RELOAD_PAUSE = 10 * 60 * 1000;
+let reloading = false;
+
+// Пишем в оба хранилища: localStorage бывает забит историей до предела квоты,
+// а без метки петля вернётся. sessionStorage переживает location.replace.
+function markReload(version) {
+  const m = JSON.stringify({ v: version, ts: Date.now() });
+  try { localStorage.setItem(RELOAD_MARK, m); } catch {}
+  try { sessionStorage.setItem(RELOAD_MARK, m); } catch {}
+}
+
+function recentlyReloadedFor(version) {
+  const recent = (storage) => {
+    try {
+      const m = JSON.parse(storage().getItem(RELOAD_MARK));
+      return m?.v === version && Date.now() - m.ts < RELOAD_PAUSE;
+    } catch { return false; }
+  };
+  return recent(() => localStorage) || recent(() => sessionStorage);
+}
+
+/// Идёт ли работа, которую сотрёт перезагрузка: всё это живёт только в памяти.
+function workInProgress() {
+  return liveOn || recording || busy
+    || photo.pages.length > 0 || photo.order.size > 0 || photo.chat.length > 0 || photo.asking
+    || !$('bigView').classList.contains('hidden')
+    || $('textInput').value.trim() !== '' || $('photoAsk').value.trim() !== ''
+    || (pendingRetry !== null && messages.some(m => m.id === pendingRetry.id));
+}
+
 async function checkForUpdate(manual) {
+  if (reloading) return;
+  let version = null;
   try {
     let usage = '';
     try { usage = '&' + usageParams(); } catch {}
     const res = await fetch(`version.json?t=${Date.now()}${usage}`, { cache: 'no-store' });
-    const { version } = await res.json();
-    if (!version || version === 'dev') return;
-    if (version === VERSION) {
-      if (manual) toast('У вас последняя версия');
+    // Верим только настоящему номеру сборки: нет сети, страница ошибки или
+    // портал Wi-Fi — не повод перезагружаться.
+    if (res.ok) version = (await res.json()).version;
+  } catch {}
+  // Пока ждали ответ, другая проверка (запуск, возврат из фона, второй тап)
+  // уже могла начать перезагрузку
+  if (reloading) return;
+  if (typeof version !== 'string' || !/^\d{12}$/.test(version)) {
+    if (manual) toast('Нет связи с сервером — проверьте позже');
+    return;
+  }
+  if (version === VERSION) {
+    if (manual) toast('У вас последняя версия');
+    return;
+  }
+  // Сама по себе перезагрузка — только в покое; кнопка в настройках — сразу
+  if (!manual) {
+    if (workInProgress()) { log(`обновление до ${version} отложено: идёт работа`); return; }
+    if (recentlyReloadedFor(version)) {
+      log(`обновление до ${version} не применилось (осталась ${VERSION}) — повторю позже`);
       return;
     }
-    log(`обновление: ${VERSION} → ${version}`);
-    if (manual) toast('Обновляю…');
-    // Сбрасываем всё, что мог закэшировать браузер, и грузим свежий index.html
-    if (window.caches) { for (const k of await caches.keys()) await caches.delete(k); }
-    setTimeout(() => location.replace(`index.html?v=${version}`), manual ? 400 : 900);
-  } catch (e) {
-    if (manual) toast('Не удалось проверить обновления');
   }
+  reloading = true;
+  log(`обновление: ${VERSION} → ${version}`);
+  // Тост держим долго: на медленной сети новая страница грузится до 20 с
+  if (manual) toast('Обновляю…', 30000);
+  // Пауза — чтобы журнал успел сохраниться, а тост мелькнуть
+  const pause = new Promise(r => setTimeout(r, manual ? 400 : 900));
+  // Кэши не трогаем: без сети страница осталась бы ни с чем. Новый SW сам
+  // скачает оболочку, а старую уберёт при активации; update() лишь ускоряет это.
+  try {
+    const reg = await navigator.serviceWorker?.getRegistration();
+    if (reg) await Promise.race([reg.update(), new Promise(r => setTimeout(r, 3000))]);
+  } catch {}
+  await pause;
+  // За эти секунды человек мог нажать микрофон или начать печатать — тогда
+  // в другой раз. Метку ставим только сейчас: иначе отменённая попытка
+  // заблокировала бы следующую на 10 минут.
+  if (!manual && workInProgress()) {
+    reloading = false;
+    log(`обновление до ${version} отложено: идёт работа`);
+    return;
+  }
+  markReload(version);
+  toast('Обновляю…', 30000);
+  location.replace(`index.html?v=${version}`);
 }
 
 /** Подтверждение в стиле приложения вместо системного окна. */
@@ -197,6 +267,19 @@ async function registerServiceWorker() {
   } catch (e) {
     log('service worker не зарегистрирован: ' + e.message);
   }
+}
+
+/** Просим систему не стирать наши данные при нехватке места: иначе iOS может
+ *  молча убрать ключ, историю и журнал. Только с экрана «Домой» — там WebKit
+ *  одобряет без вопросов, а браузеры вроде Firefox спросили бы человека. */
+async function requestPersistentStorage() {
+  try {
+    const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+    if (!standalone || !navigator.storage?.persist) return;
+    if (await navigator.storage.persisted?.()) return;
+    const ok = await navigator.storage.persist();
+    log(`хранилище: ${ok ? 'постоянное' : 'система может очистить при нехватке места'}`);
+  } catch {}
 }
 
 // ------------------------------------------------------------------ разговорник
