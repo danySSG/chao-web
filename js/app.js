@@ -1058,7 +1058,8 @@ function chatHTML(result) {
 }
 
 /// toChat — в чате появилось новое (вопрос, «Думаю…», ответ): показать его.
-/// fromDish — тап по блюду или «+»/«−»: на месте должно остаться само блюдо.
+/// fromDish — тап по блюду или «+»/«−» ({ index, top }: какое по счёту и где
+/// было на экране): на месте должно остаться само блюдо.
 function renderPhoto({ toChat = false, fromDish = false } = {}) {
   const box = $('photoResult');
   // Экран собирается заново целиком, поэтому прокрутку держим сами: иначе тап
@@ -1140,7 +1141,11 @@ function renderPhoto({ toChat = false, fromDish = false } = {}) {
   }));
   box.querySelector('.strip').scrollLeft = left;
   const msg = box.querySelector('.qa > .qa-msg:last-child');
-  const want = !toChat && msgTop != null && msg ? scroller.scrollTop + msg.getBoundingClientRect().top - msgTop : top;
+  // Тапнутое блюдо — на том же месте экрана: у блюда-дубля (тот же ключ в двух
+  // разделах) раскрывается и верхняя копия и иначе сдвигала бы его вниз.
+  const dish = fromDish && box.querySelectorAll('.dish')[fromDish.index];
+  const want = dish ? scroller.scrollTop + dish.getBoundingClientRect().top - fromDish.top
+    : !toChat && msgTop != null && msg ? scroller.scrollTop + msg.getBoundingClientRect().top - msgTop : top;
   // Пишем, только если сбилось, — чтобы не мешать прокрутке, которую ведёт палец.
   if (Math.abs(scroller.scrollTop - want) >= 1) scroller.scrollTop = want;
   if (toChat && msg) msg.scrollIntoView({ block: 'nearest' });
@@ -1219,7 +1224,8 @@ function bindDishHandlers(box) {
       else if (act === 'minus') { if (cur <= 1) photo.order.delete(key); else photo.order.set(key, cur - 1); }
       else if (cur) photo.order.delete(key);
       else { photo.order.set(key, 1); haptic(10); }
-      renderPhoto({ fromDish: true });
+      const index = [...box.querySelectorAll('.dish')].indexOf(el);
+      renderPhoto({ fromDish: { index, top: el.getBoundingClientRect().top } });
     });
   });
 }

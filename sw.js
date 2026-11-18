@@ -24,10 +24,20 @@ self.addEventListener('install', (e) => {
     const cache = await caches.open(CACHE);
     // Версионированные адреса модулей — кэшируем их же, иначе офлайн не соберётся
     const versioned = SHELL.map(p => (p.endsWith('.js') || p.endsWith('.css')) ? `${p}?v=${VERSION}` : p);
-    // По одному, а не addAll: тот падает целиком из-за единственного файла,
-    // и тогда офлайн-оболочки не остаётся вовсе — причём молча.
+    // По одному, а не addAll: иконка или манифест, не скачавшиеся с первого раза,
+    // не должны валить установку. Но без страницы, стилей и модулей этой сборки
+    // установку проваливаем: иначе activate сотрёт полный старый кэш, а новый
+    // останется дырявым — и следующий запуск без сети не откроется. Браузер
+    // повторит установку сам при следующей проверке. Что все файлы SHELL
+    // существуют, сверяет build.sh.
+    const failed = [];
     await Promise.all([...SHELL, ...versioned].map(u =>
-      cache.add(new Request(u, { cache: 'reload' })).catch(() => {})));
+      cache.add(new Request(u, { cache: 'reload' })).catch(() => failed.push(u))));
+    const essential = failed.filter(u => u === './index.html' || u.includes('?v='));
+    if (essential.length) {
+      await caches.delete(CACHE);
+      throw new Error(`оболочка не скачалась: ${essential.join(', ')}`);
+    }
     self.skipWaiting();
   })());
 });
