@@ -117,6 +117,10 @@ export const PIECES = {
   p2b: { lang: 'ru', voice: 'Charon', text: 'и можно ли расплатиться картой?' },
   p3:  { lang: 'vi', voice: 'Kore', text: 'Dạ, anh đợi em năm phút nha.' },
   p4:  { lang: 'ru', voice: 'Charon', text: 'Как вы думаете, это блюдо очень острое?' },
+  // 18.11: цены на слух, поручение переводчику, обращения (аудит F29, F33, F30)
+  p5:  { lang: 'vi', voice: 'Kore', text: 'Cái này một trăm hai, lấy hai cái thì hai trăm rưỡi.' },
+  p6:  { lang: 'ru', voice: 'Charon', text: 'Скажи ему, что мы подождём минут десять.' },
+  p7:  { lang: 'vi', voice: 'Kore', text: 'Chị ơi, chị muốn uống gì ạ?' },
 };
 export const PHRASES = {
   p1: { parts: ['p1a', 'p1b'], to: 'ru', need: [/30|тридцат/i, /250|двести\s*пятьдесят/i] },
@@ -127,11 +131,15 @@ export const PHRASES = {
   p1b: { parts: ['p1b'], to: 'ru', need: [/250|двести\s*пятьдесят/i] },
   p2a: { parts: ['p2a'], to: 'vi', need: [/sân bay/i] },
   p2b: { parts: ['p2b'], to: 'vi', need: [/thẻ/i] },
+  p5: { parts: ['p5'], to: 'ru', need: [/120|сто двадцать тысяч/i, /250|двести пятьдесят тысяч/i], forbid: [/\b102\b/] },
+  p6: { parts: ['p6'], to: 'vi', need: [/đợi|chờ/i, /10|mười/i], forbid: [/nói với|bảo (anh|chị|cậu|ông|bà|em) ấy/i] },
+  p7: { parts: ['p7'], to: 'ru', need: [/пить|выпить|напит/i], forbid: [/сестр/i] },
 };
 export function judge(id, translations) {
   const P = PHRASES[id], all = translations.join(' ');
   const okLang = translations.length > 0 && translations.every(t => (P.to === 'ru' ? isCyr(t) : isVi(t)));
   const got = P.need.map(re => re.test(all));
-  return { okLang, got, full: okLang && got.every(Boolean) };
+  const bad = (P.forbid || []).filter(re => re.test(all)).map(re => re.source);
+  return { okLang, got, bad, full: okLang && got.every(Boolean) && !bad.length };
 }
 export const sleep = ms => new Promise(r => setTimeout(r, ms));

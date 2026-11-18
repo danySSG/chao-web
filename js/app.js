@@ -1498,14 +1498,19 @@ function queueAnalysis(doc, page) {
 
 /// Что уже известно о документе — подсказка модели, чтобы разделы совпали.
 function knownSoFar(doc) {
-  const titles = new Set();
-  let isMenu = false;
+  const titles = new Set(), dishes = [];
+  let isMenu = false, summary = '';
   for (const p of doc.pages) {
     if (!p.result) continue;
     if (p.result.isMenu) isMenu = true;
-    for (const sec of p.result.sections || []) if (sec.title) titles.add(sec.title);
+    if (p.result.summary) summary = p.result.summary;
+    for (const sec of p.result.sections || []) {
+      if (sec.title) titles.add(sec.title);
+      for (const it of sec.items || []) if (it.original && dishes.length < 60) dishes.push(it.original);
+    }
   }
-  return { isMenu, sections: [...titles] };
+  // Меню — разделы и блюда (чтобы не повторять), документ — суть прошлых листов
+  return isMenu ? { isMenu, sections: [...titles], dishes } : { isMenu, sections: [], summary };
 }
 
 async function analyzePage(doc, page) {
@@ -1544,7 +1549,8 @@ function mergedResult(doc = photo) {
   const byTitle = new Map();
   for (const p of done) {
     const r = p.result;
-    if (r.summary && !merged.summary) merged.summary = r.summary;
+    // Суть последней страницы написана с учётом прошлых — она полнее
+    if (r.summary) merged.summary = r.summary;
     for (const b of r.blocks || []) merged.blocks.push(b);
     for (const sec of r.sections || []) {
       const key = (sec.title || '').trim().toLowerCase();
@@ -1641,7 +1647,9 @@ function richText(raw) {
   html = html.replace(/\*\*([\s\S]+?)\*\*/g, (_, t) => {
     const plain = t.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
     if (isMostlyCyrillic(plain)) return `<b>${t}</b>`;
-    return `<b class="say" data-say="${t}">${t}${iconSVG('speaker', 14)}</b>`;
+    // Произношение русскими буквами в скобках вьетнамский голос читать не должен
+    const say = t.replace(/\s*\([^)]*[а-яё][^)]*\)/gi, '').trim();
+    return `<b class="say" data-say="${say}">${t}${iconSVG('speaker', 14)}</b>`;
   });
   html = html.replace(/(^|[^*])\*(?!\s)([^*\n]+?)\*/g, (_, before, t) => `${before}<i>${t}</i>`);
   return html;
@@ -1811,9 +1819,12 @@ function renderPhoto({ toChat = false, fromDish = false } = {}) {
     $('photoAsk').value = b.dataset.q;
     askAboutPhoto();
   }));
+  // Фраза из ответа — озвучить и сразу показать официанту крупно
   box.querySelectorAll('.say').forEach(el => el.addEventListener('click', () => {
+    speaker.unlock();
     speaker.speak(el.dataset.say, 'vi-VN');
     haptic(10);
+    openBig({ transcript: '', translation: el.dataset.say });
   }));
   box.querySelector('.strip').scrollLeft = left;
   const msg = box.querySelector('.qa > .qa-msg:last-child');
