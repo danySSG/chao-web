@@ -126,6 +126,8 @@ select {
   display: grid; gap: 9px; justify-items: center; text-align: center;
 }
 .mf-text { font-size: 14px; color: var(--red); line-height: 1.4; }
+/* Что именно повторится: запись или набранный текст */
+.mf-detail { font-size: 13px; color: var(--muted); margin-top: -4px; overflow-wrap: anywhere; }
 .mf-retry {
   background: var(--red); color: #fff; font-size: 15px; font-weight: 700;
   padding: 11px 18px; border-radius: 14px; width: 100%;
@@ -438,6 +440,8 @@ select {
   position: fixed; left: 50%; bottom: calc(90px + env(safe-area-inset-bottom)); transform: translateX(-50%);
   background: var(--fg); color: var(--bg); padding: 11px 18px; border-radius: 30px;
   font-size: 14px; font-weight: 600; z-index: 90; max-width: 88%; text-align: center;
+  /* Висит над строкой ввода — тапы должны проходить сквозь него */
+  pointer-events: none;
 }
 
 /* Иконки */

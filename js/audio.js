@@ -17,7 +17,7 @@ export function audioContext() {
     // не доигрывает: живой режим молча зависает, никакой ошибки нет.
     ctx.onstatechange = () => {
       log(`звук: контекст ${ctx.state}`);
-      if (ctx.state !== 'running' && ctx.state !== 'closed' && keepAlive) {
+      if (ctx.state !== 'running' && ctx.state !== 'closed' && micInUse) {
         ctx.resume().catch(() => {});
       }
     };
@@ -25,11 +25,10 @@ export function audioContext() {
   return ctx;
 }
 
-let keepAlive = false;
-const micBusy = () => keepAlive;
+let micInUse = false;
 /// Пока идёт живой режим или запись, контекст должен работать — возобновляем.
 export function keepAudioRunning(on) {
-  keepAlive = on;
+  micInUse = on;
   if (on && ctx && ctx.state !== 'running') ctx.resume().catch(() => {});
 }
 
@@ -319,21 +318,25 @@ export const speaker = {
   speak(text, lang) {
     if (!('speechSynthesis' in window) || !text) return;
     this.stop();
-    if (!micBusy()) setAudioMode(false);
+    if (!micInUse) setAudioMode(false);
     const u = new SpeechSynthesisUtterance(text);
     u.lang = lang;
     u.rate = 0.95;
     const voices = speechSynthesis.getVoices().filter(v => v.lang?.replace('_', '-').startsWith(lang.slice(0, 2)));
     const best = voices.find(v => /enhanced|premium|siri/i.test(v.name)) || voices[0];
     if (best) u.voice = best;
+    let started = false;
     const done = () => this._set(false);
-    u.onstart = () => this._set(true);
+    u.onstart = () => { started = true; this._set(true); };
     u.onend = done;
-    u.onerror = done;
+    u.onerror = (e) => { log(`озвучка: ошибка ${e.error || ''}`); done(); };
     // Страховка: на iOS onend изредка не приходит, и микрофон остался бы
     // заглушённым навсегда. ~14 знаков в секунду при rate 0.95, плюс запас.
     clearTimeout(this._guard);
-    this._guard = setTimeout(done, 2000 + (text.length / 14) * 1000);
+    this._guard = setTimeout(() => {
+      if (!started) log('озвучка не началась — iOS ждёт нажатия');
+      done();
+    }, 2000 + (text.length / 14) * 1000);
     speechSynthesis.speak(u);
   },
 
@@ -341,6 +344,14 @@ export const speaker = {
     clearTimeout(this._guard);
     try { speechSynthesis.cancel(); } catch {}
     this._set(false);
+  },
+
+  /// Вызывать синхронно внутри нажатия: беззвучная фраза снимает запрет iOS
+  /// на речь без жеста. Без onstart — микрофон волны она не глушит.
+  unlock() {
+    if (this._unlocked || !('speechSynthesis' in window)) return;
+    this._unlocked = true;
+    try { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u); } catch {}
   },
 
   _set(v) {

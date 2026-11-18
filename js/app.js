@@ -24,7 +24,10 @@ let wakeLock = null;
 let messages = store.getCurrent();
 // Последняя неудачная попытка перевода: держим исходник (запись или текст) в памяти,
 // чтобы повторить БЕЗ просьбы сказать ещё раз — в разговоре это дорогого стоит.
-let pendingRetry = null;
+// Повтор у каждой карточки неудачи свой: при сбоях сериями раньше держалась
+// только последняя, и первая запись пропадала молча.
+const retries = new Map();   // id карточки → { run, label, detail }
+let newAfterBusy = false;    // ✎ нажали, пока шёл перевод: начнём, когда допишем
 
 // Текущие фото: images — страницы одного меню/документа, chat — вопросы по ним
 const MAX_PHOTOS = 6;
@@ -53,9 +56,12 @@ function boot() {
   });
 
   // диалог
-  $('liveBtn').addEventListener('click', toggleLive);
-  $('micBtn').addEventListener('click', toggleRecording);
-  $('sendBtn').addEventListener('click', sendText);
+  // iOS разрешает речь только из нажатия: первое «пустое» высказывание внутри
+  // тапа открывает озвучку до конца жизни страницы, иначе после перезапуска
+  // автоозвучка перевода молчала до первого ручного «Озвучить».
+  $('liveBtn').addEventListener('click', () => { speaker.unlock(); toggleLive(); });
+  $('micBtn').addEventListener('click', () => { speaker.unlock(); toggleRecording(); });
+  $('sendBtn').addEventListener('click', () => { speaker.unlock(); sendText(); });
   $('textInput').addEventListener('input', (e) => {
     const has = e.target.value.trim().length > 0;
     $('sendBtn').classList.toggle('hidden', !has);
@@ -66,7 +72,7 @@ function boot() {
   });
   $('textInput').addEventListener('focus', () => setTypingPause(true));
   $('textInput').addEventListener('blur', () => { if (!$('textInput').value.trim()) setTypingPause(false); });
-  $('textInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendText(); });
+  $('textInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { speaker.unlock(); sendText(); } });
   $('statusAction').addEventListener('click', () => {
     if (statusFn) { const fn = statusFn; setStatus(''); fn(); }
     else if (liveOn) stopLive();
@@ -127,6 +133,8 @@ function boot() {
   // фоновый режим: iOS всё равно отрежет микрофон — выключаем живой режим честно
   document.addEventListener('visibilitychange', () => {
     if (document.hidden && liveOn) { stopLive(); toast('Живой перевод выключен: приложение свернули'); }
+    // В фоне iOS отрежет микрофон — отправляем то, что успели записать
+    if (document.hidden && recording) { log('запись: приложение свернули — отправляю записанное'); toggleRecording(); }
     if (!document.hidden) checkForUpdate();
   });
 
@@ -190,7 +198,7 @@ function workInProgress() {
     || photo.pages.length > 0 || photo.order.size > 0 || photo.chat.length > 0 || photo.asking
     || !$('bigView').classList.contains('hidden')
     || $('textInput').value.trim() !== '' || $('photoAsk').value.trim() !== ''
-    || (pendingRetry !== null && messages.some(m => m.id === pendingRetry.id));
+    || messages.some(m => m.failed && retries.has(m.id));
 }
 
 async function checkForUpdate(manual) {
@@ -511,10 +519,17 @@ function renderFeed() {
       box.className = 'msg-failed';
       box.innerHTML = `<div class="mf-text"></div>`;
       box.querySelector('.mf-text').textContent = m.error || 'Не удалось перевести.';
-      if (pendingRetry && pendingRetry.id === m.id) {
+      if (m.detail) {
+        const d = document.createElement('div');
+        d.className = 'mf-detail';
+        d.textContent = m.detail;
+        box.appendChild(d);
+      }
+      const r = retries.get(m.id);
+      if (r) {
         const again = document.createElement('button');
         again.className = 'mf-retry';
-        again.textContent = pendingRetry.label;
+        again.textContent = r.label;
         again.addEventListener('click', () => retryFailed(m.id));
         box.appendChild(again);
       }
@@ -964,11 +979,13 @@ async function toggleRecording() {
     showBanner(false);
     const wav = mic.stopRecording();
     mic.stop();
+    keepAudioRunning(false);
     setStatus('');
     if (!wav) { toast('Слишком коротко — скажите фразу целиком'); return; }
     // Запись остаётся в замыкании: повтор не требует говорить снова — в разговоре это важно
     const again = () => gemini.translateAudio(wav, contextSnippet());
-    await translateAndAdd(again, again, 'Повторить — запись сохранена');
+    const sec = Math.max(1, Math.round((wav.length * 3 / 4 - 44) / 32000));
+    await translateAndAdd(again, again, 'Повторить — запись сохранена', `запись · ${sec} с`);
     return;
   }
   micStarting = true;
@@ -983,6 +1000,9 @@ async function toggleRecording() {
     $('liveBtn').disabled = false;
   }
   mic.startRecording();
+  // iOS ставит звук на паузу (уведомление, Siri, наушники) — без этого запись
+  // молча переставала копить звук, а на экране «идёт запись».
+  keepAudioRunning(true);
   haptic(14);
   recording = true;
   updateMicIndicator();
@@ -998,6 +1018,7 @@ function cancelRecording() {
   updateMicIndicator();
   mic.stopRecording();
   mic.stop();
+  keepAudioRunning(false);
   $('micBtn').classList.remove('rec');
   $('micBtn').innerHTML = iconSVG('mic', 25);
   showBanner(false);
@@ -1014,11 +1035,12 @@ async function sendText() {
   setTypingPause(false);
   if (liveOn) liveActivity();
   const again = () => gemini.translateText(text, contextSnippet());
-  await translateAndAdd(again, again, 'Повторить перевод');
+  await translateAndAdd(again, again, 'Повторить перевод', `«${text.length > 80 ? text.slice(0, 80) + '…' : text}»`);
 }
 
-/// fn — сам перевод, retry — как повторить его же, если не выйдет.
-async function translateAndAdd(fn, retry, retryLabel) {
+/// fn — сам перевод, retry — как повторить его же, если не выйдет;
+/// detail — что повторится («запись · 4 с», набранный текст).
+async function translateAndAdd(fn, retry, retryLabel, detail) {
   busy = true;
   $('sendBtn').disabled = true;
   $('micBtn').disabled = true;
@@ -1031,7 +1053,7 @@ async function translateAndAdd(fn, retry, retryLabel) {
     if (!translation) {
       // Пустой перевод — тоже неудача: пустой пузырь в ленте ничем не лучше молчания.
       log('перевод пустой — показываю как неудачу');
-      addFailure('Не разобрал речь. Попробуйте ещё раз или поднесите телефон ближе.', retry, retryLabel);
+      addFailure(detail?.startsWith('«') ? 'Не понял текст — попробуйте написать иначе.' : 'Не разобрал речь. Попробуйте ещё раз или поднесите телефон ближе.', retry, retryLabel, detail);
     } else {
       addMessage({ id: crypto.randomUUID(), ts: Date.now(), sourceLanguage: r.sourceLanguage, transcript: r.transcript, translation });
       if (r.sourceLanguage === 'ru') speaker.speak(translation, 'vi-VN');
@@ -1042,31 +1064,32 @@ async function translateAndAdd(fn, retry, retryLabel) {
     log(`перевод не удался: ${e.message}`);
     // Тост исчезает через секунду, а человек стоит перед собеседником с пустым
     // экраном. Неудача остаётся в ленте — вместе с кнопкой повтора той же записи.
-    addFailure(e.message, retry, retryLabel);
+    addFailure(e.message, retry, retryLabel, detail);
   } finally {
     clearTimeout(slowTimer);
     showTyping(false);
     busy = false;
     $('sendBtn').disabled = false;
     $('micBtn').disabled = liveOn;   // в живом режиме запись всё равно недоступна
+    if (newAfterBusy) { newAfterBusy = false; newSession(); }
   }
 }
 
 /// Неудача попадает в ленту как карточка с кнопкой «Повторить»: исходник
 /// (запись или текст) сохранён, повторять вслух не нужно.
-function addFailure(text, retry, retryLabel) {
+function addFailure(text, retry, retryLabel, detail) {
   const id = crypto.randomUUID();
-  if (retry) pendingRetry = { id, run: retry, label: retryLabel || 'Повторить' };
-  addMessage({ id, ts: Date.now(), failed: true, error: text, sourceLanguage: 'ru', transcript: '', translation: '' });
+  if (retry) retries.set(id, { run: retry, label: retryLabel || 'Повторить', detail });
+  addMessage({ id, ts: Date.now(), failed: true, error: text, detail: detail || '', sourceLanguage: 'ru', transcript: '', translation: '' });
 }
 
 async function retryFailed(id) {
-  if (!pendingRetry || pendingRetry.id !== id || busy) return;
-  const { run, label } = pendingRetry;
-  pendingRetry = null;
+  const r = retries.get(id);
+  if (!r || busy) return;
+  retries.delete(id);
   messages = messages.filter(m => m.id !== id);   // карточку убираем, место займёт результат
   renderFeed();
-  await translateAndAdd(run, run, label);
+  await translateAndAdd(r.run, r.run, r.label, r.detail);
 }
 
 /** Пузырь с точками в ленте, пока идёт перевод. */
@@ -1084,15 +1107,28 @@ function showTyping(on) {
 }
 
 function newSession() {
+  if (recording) { cancelRecording(); toast('Запись отменена'); }
   if (!messages.length) return;
+  // Перевод ещё идёт — иначе он лёг бы в новый разговор и прозвучал там
+  if (busy) { newAfterBusy = true; toast('Перевод ещё идёт — допишу его и начну новый разговор'); return; }
   speaker.stop();
-  store.setCurrent(messages);
-  store.archiveCurrent();
+  store.takeEvicted();
+  if (!store.setCurrent(messages) || !store.archiveCurrent()) {
+    log('новый разговор: не хватило места для архива');
+    toast('Не хватает места — удалите старые фото в Истории');
+    return;
+  }
   messages = [];
+  retries.clear();
   renderFeed();
   // Модель волны помнит прошлого собеседника — новому разговору нужна чистая сессия
   if (liveOn) live?.fresh();
-  toast('Разговор сохранён в историю');
+  const ev = store.takeEvicted();
+  if (ev.photos || ev.sessions) {
+    const what = [ev.sessions && plural(ev.sessions, 'старый разговор', 'старых разговора', 'старых разговоров'), ev.photos && plural(ev.photos, 'старое фото', 'старых фото', 'старых фото')].filter(Boolean).join(' и ');
+    log(`место: удалено ${what}`);
+    toast(`Разговор сохранён. Не хватало места — пришлось удалить ${what}`, 4000);
+  } else toast('Разговор сохранён в историю');
 }
 
 // ------------------------------------------------------------------ фото
@@ -1569,8 +1605,10 @@ function openHistory(seg) {
          <span class="preview"></span></div>`,
         () => { store.removeSession(s.id); openHistory('dialogs'); },
         () => {
+          if (busy || recording) { toast('Дождитесь перевода — он ещё идёт'); return; }
           const restored = store.resumeSession(s.id);
-          if (restored) { messages = restored; renderFeed(); if (liveOn) live?.fresh(); $('history').classList.add('hidden'); switchTab('dialog'); toast('Разговор продолжен'); }
+          if (!restored) { toast('Не хватило места — сначала удалите старые фото в Истории'); return; }
+          if (restored) { messages = restored; retries.clear(); renderFeed(); if (liveOn) live?.fresh(); $('history').classList.add('hidden'); switchTab('dialog'); toast('Разговор продолжен'); }
         }
       );
       el.querySelector('b').textContent = title;
@@ -1656,7 +1694,7 @@ function updateStorageInfo() {
   const kb = store.usageKB();
   const sessions = store.getSessions().length;
   const photos = store.getPhotos().length;
-  $('storageInfo').textContent = `Занято ${kb} КБ · ${plural(sessions, 'разговор', 'разговора', 'разговоров')} · ${plural(photos, 'фото', 'фото', 'фото')}`;
+  $('storageInfo').textContent = `Занято ${kb} КБ из ~5 МБ · ${plural(sessions, 'разговор', 'разговора', 'разговоров')} · ${plural(photos, 'фото', 'фото', 'фото')}`;
 }
 
 function escapeHtml(s) {

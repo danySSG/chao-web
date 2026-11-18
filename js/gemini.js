@@ -85,14 +85,18 @@ function retryPause(message, isDaily) {
 function quotaMap() {
   try { return JSON.parse(localStorage.getItem(QUOTA_KEY)) || {}; } catch { return {}; }
 }
-function isOutOfQuota(model) {
-  const until = quotaMap()[model];
-  return typeof until === 'number' && Date.now() < until;
+/// Пауза модели: { until, why } или null. why — day | minute | busy | timeout:
+/// когда на паузе все модели, человек должен узнать причину и срок, а не
+/// голое «Не удалось получить ответ».
+function quotaPause(model) {
+  const v = quotaMap()[model];
+  const p = typeof v === 'number' ? { until: v, why: 'busy' } : v;
+  return p && Date.now() < p.until ? p : null;
 }
-function markOutOfQuota(model, pause) {
+function markOutOfQuota(model, pause, why) {
   try {
     const map = quotaMap();
-    map[model] = Date.now() + pause;
+    map[model] = { until: Date.now() + pause, why };
     localStorage.setItem(QUOTA_KEY, JSON.stringify(map));
   } catch {}
 }
@@ -237,6 +241,8 @@ export class GeminiError extends Error {
   constructor(message, kind) { super(message); this.kind = kind; }
 }
 
+const REGION_MSG = 'Google не обслуживает запросы с российских адресов. Если включён VPN с российским сервером — выключите его на время перевода.';
+
 function friendly(status, message, quotaId = '') {
   if (status === 429) {
     return /PerDay/i.test(quotaId) || /PerDay|per day/i.test(message || '')
@@ -246,6 +252,8 @@ function friendly(status, message, quotaId = '') {
       ? 'Дневной лимит текстовых запросов исчерпан. Живой перевод (кнопка-волна) считается отдельно и работает.'
       : 'Слишком много запросов подряд. Подождите минуту — или говорите через живой перевод, его это не касается.';
   }
+  // С российского адреса (в том числе через VPN) Google отвечает по-английски
+  if (/location is not supported|not available in your (country|region)/i.test(message || '')) return REGION_MSG;
   if (status === 401 || status === 403 || /api key/i.test(message)) {
     return 'Ключ не подошёл. Проверьте его в Настройках — если ключ старый, перевыпустите на aistudio.google.com.';
   }
@@ -281,17 +289,21 @@ async function callModel(model, { system, parts, contents, schema, chain, maxTok
   // обрывалась, не попробовав исправные модели. 12.11 так же повисла и 3.6-flash —
   // по таймауту цепочка ушла на 3-flash-preview, и меню разобралось за 6 с.
   // Обычный ответ: реплика 1–3 с, фото 6–8 с. Gemma медленнее всех (до ~30 с).
-  const limit = isGemma ? 55000 : chain === 'photo' ? 30000 : 20000;
+  // Таймаут включает и отправку тела: минутная запись или вопрос по трём
+  // страницам меню по медленному 4G едва успевают уйти. Поэтому срок растёт с
+  // размером — секунда на каждые 40 КБ.
+  const body = JSON.stringify({
+    systemInstruction: { parts: [{ text: system }] },
+    contents: contents || [{ role: 'user', parts }],
+    generationConfig,
+  });
+  const limit = (isGemma ? 55000 : chain === 'photo' ? 30000 : 20000) + Math.ceil(body.length / 40000) * 1000;
   let res, data;
   try {
     res = await fetch(`${REST_BASE}/${model}:generateContent`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: system }] },
-        contents: contents || [{ role: 'user', parts }],
-        generationConfig,
-      }),
+      body,
       signal: AbortSignal.timeout?.(limit),
     });
     // Ответ без потоковой выдачи: тело приходит целиком в конце, и таймаут
@@ -299,9 +311,11 @@ async function callModel(model, { system, parts, contents, schema, chain, maxTok
     if (res.ok) data = await res.json();
   } catch (e) {
     if (e?.name === 'TimeoutError' || e?.name === 'AbortError') {
-      markOutOfQuota(model, 3 * 60 * 1000);
-      log(`${model}: нет ответа ${limit / 1000} с, пропускаю 3 мин`);
-      throw new GeminiError('Gemini слишком долго не отвечает. Попробуйте ещё раз чуть позже.', 'timeout');
+      // Модель или сеть — решает generate: большой запрос скорее застрял в сети.
+      const err = new GeminiError('Gemini слишком долго не отвечает. Попробуйте ещё раз чуть позже.', 'timeout');
+      err.big = body.length > 150 * 1024;
+      err.limit = limit;
+      throw err;
     }
     if (e?.name === 'SyntaxError') throw new GeminiError('Не удалось разобрать ответ Gemini.', 'parse');
     throw new GeminiError('Не удалось связаться с Gemini. Проверьте интернет.', 'offline');
@@ -317,13 +331,13 @@ async function callModel(model, { system, parts, contents, schema, chain, maxTok
     if (res.status === 503 || /high demand|overloaded/i.test(msg)) {
       // Перегруженная модель отвечает отказом за пару секунд — но на каждом
       // запросе. Пара минут паузы дешевле, чем этот налог на всю цепочку.
-      markOutOfQuota(model, 3 * 60 * 1000);
+      markOutOfQuota(model, 3 * 60 * 1000, 'busy');
       log(`${model}: перегружена, пропускаю 3 мин`);
     }
     if (res.status === 429) {
       const isDaily = /PerDay/i.test(quotaId) || /PerDay|per day/i.test(msg);
       const pause = retryPause(msg, isDaily);
-      markOutOfQuota(model, pause);
+      markOutOfQuota(model, pause, isDaily ? 'day' : 'minute');
       log(`${model}: лимит ${isDaily ? 'на сутки' : 'на минуту'}, пропускаю ${Math.round(pause / 1000)} с`);
     }
     const err = new GeminiError(friendly(res.status, msg, quotaId), res.status === 429 ? 'quota' : 'api');
@@ -361,9 +375,12 @@ async function generate(opts) {
   const base = opts.chain === 'photo' ? CHAIN_PHOTO : CHAIN_DIALOG;
   const chain = hasAudio ? base : [...base, LAST_RESORT];
   let lastErr = null;
+  const skipped = [];
+  let timeouts = 0;
 
   for (const model of chain) {
-    if (isOutOfQuota(model)) continue;  // уже помечена, о причине сказано при пометке
+    const pause = quotaPause(model);
+    if (pause) { skipped.push([model, pause]); continue; }
     try {
       const t0 = performance.now();
       let result;
@@ -379,7 +396,20 @@ async function generate(opts) {
       log(`${model}: ответ за ${Math.round(performance.now() - t0)} мс`);
       return result;
     } catch (e) {
-      if (e.kind === 'offline' || e.kind === 'nokey') throw e;
+      if (e.kind === 'offline' || e.kind === 'nokey' || e.kind === 'slownet') throw e;
+      if (e.kind === 'timeout') {
+        // Медленная сеть — не поломка модели: раньше один застрявший запрос
+        // выключал все модели на 3 минуты, и «Фото» вместе с «Диалогом» лежали,
+        // хотя сеть уже ожила. Большой запрос или второй таймаут подряд — это сеть.
+        if (e.big || ++timeouts >= 2) {
+          log(`${model}: нет ответа ${Math.round(e.limit / 1000)} с — похоже, медленная связь; модели не помечаю`);
+          throw new GeminiError('Связь медленная — Gemini не успел получить запрос. Повторите, когда сеть оживёт.', 'slownet');
+        }
+        markOutOfQuota(model, 3 * 60 * 1000, 'timeout');
+        log(`${model}: нет ответа ${Math.round(e.limit / 1000)} с, пропускаю 3 мин → следующая модель`);
+        lastErr = e;
+        continue;
+      }
       const m = (e.raw || e.message || '').toLowerCase();
       const retriable =
         e.kind === 'quota' || e.kind === 'timeout' ||
@@ -391,7 +421,13 @@ async function generate(opts) {
       if (!retriable) throw e;
     }
   }
-  throw lastErr || new GeminiError('Не удалось получить ответ.', 'api');
+  if (lastErr) throw lastErr;
+  // До запроса не дошло: все модели на паузе. Говорим почему и надолго ли.
+  const left = (p) => Math.max(1, Math.ceil((p.until - Date.now()) / 60000));
+  log(`все модели на паузе: ${skipped.map(([m, p]) => `${m} (${p.why}, ещё ${left(p)} мин)`).join(', ')}`);
+  if (skipped.length && skipped.every(([, p]) => p.why === 'day')) throw new GeminiError(friendly(429, 'per day', 'PerDay'), 'quota');
+  const soon = skipped.length ? Math.min(...skipped.map(([, p]) => left(p))) : 1;
+  throw new GeminiError(`Модели Gemini сейчас перегружены или упёрлись в лимит. Попробуйте через ${soon} мин${hasAudio ? ' — или включите живой перевод (волну), он считается отдельно' : ''}.`, 'quota');
 }
 
 // ------------------------------------------------- защита от сорвавшейся модели
@@ -491,11 +527,29 @@ export const gemini = {
     throw new GeminiError(friendly(res.status, msg), 'api');
   },
 
+  /// Кэш — запасной путь на случай без сети, а не экономия: перевод зависит
+  /// от контекста (обращение anh/em, о чём говорили), и утренний ответ
+  /// официантке не годится вечером пожилой хозяйке.
   async translateText(text, context) {
-    const cached = store.getCachedTranslation(text);
-    if (cached) { log('перевод из кэша (запрос не потрачен)'); return cached; }
-    const result = await this._translateText(text, context);
-    store.cacheTranslation(text, result);
+    const fromCache = (why) => {
+      const c = store.getCachedTranslation(text);
+      if (c) log(`${why} — перевод из кэша`);
+      return c;
+    };
+    if (!navigator.onLine) { const c = fromCache('нет сети'); if (c) return c; }
+    let result;
+    try {
+      result = await this._translateText(text, context);
+    } catch (e) {
+      if (e.kind === 'offline' || e.kind === 'slownet') { const c = fromCache('нет связи'); if (c) return c; }
+      throw e;
+    }
+    // В кэш — только настоящий перевод: пустой или повтор оригинала навсегда
+    // отвечал бы на «Повторить» той же неудачей без запроса.
+    const tr = (result?.translation || '').trim();
+    const trIsRu = /[а-яё]/i.test(tr) && (tr.match(/[а-яё]/gi) || []).length > (tr.match(/[a-z]/gi) || []).length / 2;
+    const fromRu = result?.sourceLanguage === 'ru';
+    if (tr && tr !== text.trim() && fromRu !== trIsRu) store.cacheTranslation(text, result);
     return result;
   },
 
@@ -763,6 +817,7 @@ export class LiveSession {
 
   _clearTimers() {
     clearTimeout(this.retryTimer);
+    clearTimeout(this.connectTimer);
     clearTimeout(this.stableTimer);
     clearTimeout(this.goAwayTimer);
     this.goAwayPending = false;
@@ -806,6 +861,14 @@ export class LiveSession {
     this.slow = false;
     this.connResumed = !!this.resumeHandle;
     this.connTurns = 0;
+    // Рукопожатие или setup может повиснуть (плохой 4G, TLS): без срока
+    // волна навсегда осталась бы в «подключаюсь…».
+    clearTimeout(this.connectTimer);
+    this.connectTimer = setTimeout(() => {
+      if (this.ws !== ws || this.setupOk) return;
+      log('Live: подключение не завершилось за 12 с');
+      this._reconnect();
+    }, 12000);
 
     ws.onopen = () => {
       const model = LIVE_MODELS[this.modelIndex];
@@ -854,6 +917,7 @@ export class LiveSession {
       if (msg.setupComplete) {
         this.setupOk = true;
         this.retriedBusy = false;
+        clearTimeout(this.connectTimer);
         log('Live: сессия готова');
         // Счётчик попыток обнуляем не сразу: сессия, которая готова и тут же
         // умирает, иначе возобновлялась бы по кругу бесконечно.
@@ -893,7 +957,13 @@ export class LiveSession {
       if (sc.turnComplete) this._turnComplete();
     };
 
-    ws.onerror = () => { if (this.ws === ws) log('Live: ошибка сокета'); };
+    ws.onerror = () => {
+      if (this.ws !== ws) return;
+      log('Live: ошибка сокета');
+      // Сорванное рукопожатие не всегда сопровождается событием close —
+      // тогда закрытие обрабатываем сами.
+      setTimeout(() => { if (this.ws === ws && ws.readyState === 3) ws.onclose({ code: 1006, reason: '' }); }, 1000);
+    };
     ws.onclose = (e) => {
       if (this.ws !== ws) return;
       log(`Live: соединение закрыто (код ${e.code}${e.reason ? ', ' + e.reason : ''}${this.setupOk ? '' : ', до готовности'})`);
@@ -905,7 +975,7 @@ export class LiveSession {
       // то же объяснение по-русски, что и в текстовом переводе.
       // Только про ключ («API key not valid / expired», API_KEY_INVALID): отказ
       // в доступе к конкретной модели должен по-прежнему вести на запасную.
-      if (/api.?key/i.test(e.reason || '')) {
+      if (/api.?key|location is not supported|not available in your/i.test(e.reason || '')) {
         this.h.onError?.(friendly(403, e.reason));
         this.shouldRun = false;
         return;
