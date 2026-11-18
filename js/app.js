@@ -116,7 +116,8 @@ function boot() {
   $('setKey').value = store.getKey();
   $('setSave').addEventListener('click', () => {
     const v = $('setKey').value.trim();
-    if (v.length < 20) { toast('Ключ выглядит слишком коротким'); return; }
+    const problem = v ? keyProblem(v) : 'Сначала вставьте ключ.';
+    if (problem) { toast(problem); return; }
     store.setKey(v);
     $('setStatus').textContent = 'Ключ сохранён.';
     toast('Ключ сохранён');
@@ -338,7 +339,26 @@ function usePhrase(ru, vi) {
 }
 
 let obStep = 0;
-const OB_LAST = 3;
+const OB_LAST = 2;
+// Шаг мастера переживает перезагрузку: iOS часто выгружает вкладку, пока
+// человек получает ключ на сайте Google, — и раньше он возвращался на шаг 1.
+const OB_STEP_KEY = 'chao.obstep';
+let installFirstSkipped = false;
+
+/// Где открыто приложение — от этого зависят установка и подсказки.
+function detectEnv() {
+  const ua = navigator.userAgent;
+  // iPad с iPadOS выдаёт себя за Mac — узнаём по сенсорному экрану
+  const ios = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+  // Встроенные браузеры мессенджеров (Telegram на iOS по UA не отличить)
+  const inApp = /FBAN|FBAV|FB_IAB|Instagram|Zalo|Line\/|Telegram|MicroMessenger/i.test(ua) || (/Android/.test(ua) && /; wv\)/.test(ua));
+  const chromeIOS = ios && /CriOS/.test(ua);
+  const safari = ios && !inApp && !/CriOS|FxiOS|EdgiOS|OPiOS|YaBrowser|GSA\//.test(ua);
+  // iOS 26 заморозил версию системы в UA, а версия Safari по-прежнему честная
+  const safariVersion = +(/Version\/(\d+)/.exec(ua)?.[1] || 0);
+  return { ios, inApp, chromeIOS, safari, safariVersion, android: /Android/.test(ua) };
+}
+const ENV = detectEnv();
 
 function initOnboarding() {
   $('obIllust1').innerHTML = featuresIllustration();
@@ -352,18 +372,39 @@ function initOnboarding() {
     dots.appendChild(d);
   }
 
+  if (ENV.inApp) {
+    $('obInApp').classList.remove('hidden');
+    $('obCopyLink').addEventListener('click', copyLink);
+  }
+  // Как вернуться из Google — своё для значка, Safari и остальных
+  $('obBackHint').textContent = isInstalled() && ENV.ios
+    ? 'Вернитесь в Chào! — «◀ Chào!» слева вверху экрана — и вставьте ключ в поле ниже.'
+    : ENV.safari
+      ? 'Вернитесь на вкладку с Chào! (список вкладок или смахивание по адресной строке) и вставьте ключ в поле ниже.'
+      : 'Вернитесь сюда (кнопка «Назад» или переключение приложений) и вставьте ключ в поле ниже.';
+
   $('obNext').addEventListener('click', obNext);
   $('obBack').addEventListener('click', () => goStep(obStep - 1));
   $('obPaste').addEventListener('click', pasteKey);
   for (const ev of ['input', 'change', 'paste']) {
     $('obKey').addEventListener(ev, () => setTimeout(updateObNav, 0));
   }
-  $('installSkip').addEventListener('click', () => { $('install').classList.add('hidden'); showApp(); });
+  // Вернулись из Google — поле для ключа сразу на виду
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden || $('onboarding').classList.contains('hidden') || obStep !== OB_LAST || $('obKey').value) return;
+    $('obKey').scrollIntoView({ block: 'center', behavior: 'smooth' });
+  });
   updateObNav();
+}
+
+async function copyLink() {
+  try { await navigator.clipboard.writeText(location.origin + location.pathname); toast('Ссылка скопирована'); }
+  catch { toast(location.origin + location.pathname); }
 }
 
 function goStep(n) {
   obStep = Math.max(0, Math.min(OB_LAST, n));
+  try { localStorage.setItem(OB_STEP_KEY, String(obStep)); } catch {}
   document.querySelectorAll('.ob-step').forEach(el => {
     el.classList.toggle('hidden', Number(el.dataset.step) !== obStep);
   });
@@ -373,12 +414,31 @@ function goStep(n) {
   updateObNav();
 }
 
+/// Что не так со вставленной строкой — до похода в сеть. '' — похоже на ключ.
+function keyProblem(key) {
+  if (!key) return '';
+  if (/\s/.test(key) || /https?:|www\.|@/.test(key)) return 'Похоже, это не ключ — скопируйте строку с сайта Google целиком.';
+  if (key.length < 20) return 'Строка слишком короткая — ключ длинный, около 40 знаков.';
+  return '';
+}
+
+function setKeyHint(text, cls) {
+  const h = $('obKeyHint');
+  h.textContent = text;
+  h.className = `fine center${cls ? ' ob-key-' + cls : ''}`;
+}
+
 function updateObNav() {
   $('obBack').classList.toggle('hidden', obStep === 0);
   const isLast = obStep === OB_LAST;
-  const keyOk = $('obKey').value.trim().length >= 20;
+  const key = $('obKey').value.trim();
+  const problem = keyProblem(key);
   $('obNext').textContent = isLast ? 'Готово' : 'Далее';
-  $('obNext').disabled = isLast && !keyOk;
+  $('obNext').disabled = isLast && (key.length < 20 || !!problem);
+  // Человек видит, что именно вставилось, — сам ключ при этом скрыт
+  if (problem) setKeyHint(problem, 'bad');
+  else if (key) setKeyHint(`${key.slice(0, 6)}…${key.slice(-4)} · ${plural(key.length, 'знак', 'знака', 'знаков')}`, '');
+  else setKeyHint('Ключ сохранится только на этом устройстве.', '');
 }
 
 async function pasteKey() {
@@ -394,52 +454,125 @@ async function pasteKey() {
 }
 
 function obNext() {
+  // На айфоне в Safari сначала значок: он хранит данные отдельно от Safari,
+  // и ключ, введённый здесь, пришлось бы вводить второй раз.
+  if (obStep === 0 && ENV.safari && !isInstalled() && !installFirstSkipped) {
+    $('onboarding').classList.add('hidden');
+    showInstallGuide('first');
+    return;
+  }
   if (obStep < OB_LAST) { goStep(obStep + 1); return; }
+  finishOnboarding();
+}
+
+/// Проверяем ключ сразу, а не на первой фразе перед официантом.
+async function finishOnboarding() {
   const key = $('obKey').value.trim();
-  if (key.length < 20) return;
+  if (key.length < 20 || keyProblem(key)) return;
+  $('obNext').disabled = true;
+  $('obNext').textContent = 'Проверяю ключ…';
+  let note = '';
+  try {
+    await gemini.checkKey(key);
+  } catch (e) {
+    log(`ключ: проверка — ${e.kind}: ${e.message}`);
+    if (e.kind === 'badkey') {
+      updateObNav();
+      setKeyHint('Ключ не подошёл — скопируйте строку с сайта Google ещё раз.', 'bad');
+      return;
+    }
+    note = e.kind === 'region'
+      ? 'Ключ сохранён. Переводить получится без российского VPN или за пределами России.'
+      : 'Ключ сохранён — проверим его при первом переводе.';
+  }
   store.setKey(key);
+  try { localStorage.removeItem(OB_STEP_KEY); } catch {}
   $('onboarding').classList.add('hidden');
-  if (isInstalled()) { showApp(); toast('Готово! Можно говорить'); }
-  else showInstallGuide();
+  updateObNav();
+  if (isInstalled()) { showApp(); toast(note || 'Готово! Можно говорить', note ? 4500 : 2600); }
+  else { showInstallGuide('after'); if (note) toast(note, 4500); }
 }
 
 function isInstalled() {
   return matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 }
 
-/** Инструкция по установке — своя для каждой платформы. */
-function showInstallGuide() {
-  const ua = navigator.userAgent;
-  const isIOS = /iPhone|iPad|iPod/.test(ua);
-  const isSafari = isIOS && !/CriOS|FxiOS|EdgiOS|OPiOS/.test(ua);
-  const isAndroid = /Android/.test(ua);
+/** Инструкция по установке — своя для каждой платформы.
+ *  mode: 'first' — до ключа (айфон, Safari); 'after' — ключ уже введён в
+ *  браузере; 'help' — из настроек. */
+function showInstallGuide(mode = 'help') {
   const steps = $('installSteps');
   steps.innerHTML = '';
+  steps.parentElement.querySelectorAll('.install-extra').forEach(el => el.remove());
+  $('installNow').classList.add('hidden');
+  $('installCopyKey').classList.add('hidden');
+  $('installLead').textContent = 'Добавьте Chào! на домашний экран — будет открываться как обычное приложение, во весь экран.';
+  $('installTitle').textContent = mode === 'first' ? 'Сначала — значок' : mode === 'help' ? 'Значок на экране «Домой»' : 'Последний шаг';
+  $('installSkip').textContent = mode === 'help' ? 'Назад' : 'Пропустить — пользоваться так';
+  $('installSkip').onclick = () => { $('install').classList.add('hidden'); showApp(); };
 
   const put = (html) => { const li = document.createElement('li'); li.innerHTML = html; steps.appendChild(li); };
+  const extraButton = (label, fn) => {
+    const b = document.createElement('button');
+    b.className = 'btn ghost install-extra';
+    b.textContent = label;
+    b.addEventListener('click', fn);
+    steps.after(b);
+  };
 
-  if (isIOS && isSafari) {
-    $('installIllust').innerHTML = shareIllustration() + addHomeIllustration();
-    put('Нажмите кнопку <b>«Поделиться»</b> внизу экрана — квадрат со стрелкой вверх.');
-    put('Пролистайте список вниз до пункта <b>«На экран „Домой“»</b> и нажмите его.');
-    put('Нажмите <b>«Добавить»</b> справа вверху.');
+  if (ENV.ios && ENV.safari) {
+    if (ENV.safariVersion >= 26) {
+      // В iOS 26 кнопки «Поделиться» внизу по умолчанию нет — она за «•••»
+      $('installIllust').innerHTML = addHomeIllustration();
+      put('Нажмите <b>«•••»</b> рядом с адресной строкой. Если внизу видна кнопка <b>«Поделиться»</b> — квадрат со стрелкой, — можно сразу её.');
+      put('Выберите <b>«Поделиться»</b> и пролистайте вниз до <b>«На экран „Домой“»</b>.');
+      put('Проверьте, что включено <b>«Открыть как веб-приложение»</b>, и нажмите <b>«Добавить»</b>.');
+    } else {
+      $('installIllust').innerHTML = shareIllustration() + addHomeIllustration();
+      put('Нажмите кнопку <b>«Поделиться»</b> внизу экрана — квадрат со стрелкой вверх.');
+      put('Пролистайте список вниз до пункта <b>«На экран „Домой“»</b> и нажмите его.');
+      put('Нажмите <b>«Добавить»</b> справа вверху.');
+    }
     put('Закройте браузер и запускайте Chào! с домашнего экрана — по значку с флагом.');
-  } else if (isIOS) {
-    $('installLead').textContent = 'Чтобы значок появился на домашнем экране, эту страницу нужно открыть в Safari — другие браузеры на iPhone так не умеют.';
+    if (mode === 'first') {
+      $('installLead').textContent = 'Сначала добавьте Chào! на экран «Домой», а ключ введёте уже в значке: Safari и значок хранят данные раздельно — введённое здесь значок не увидит.';
+      $('installSkip').textContent = 'Пропустить — настроить в браузере';
+      $('installSkip').onclick = () => {
+        installFirstSkipped = true;
+        $('install').classList.add('hidden');
+        $('onboarding').classList.remove('hidden');
+        goStep(1);
+      };
+    } else if (mode === 'after') {
+      $('installLead').textContent = 'Добавьте Chào! на экран «Домой» — будет открываться как обычное приложение. В значке ключ спросят ещё раз: Safari и значок хранят данные раздельно. Скопируйте ключ сейчас — в значке останется нажать «Вставить из буфера».';
+      $('installCopyKey').classList.remove('hidden');
+      $('installCopyKey').onclick = async () => {
+        try { await navigator.clipboard.writeText(store.getKey()); toast('Ключ скопирован'); haptic(12); }
+        catch { toast('Не получилось скопировать — ключ можно взять на сайте Google ещё раз'); }
+      };
+    }
+  } else if (ENV.chromeIOS) {
+    $('installIllust').innerHTML = addHomeIllustration();
+    put('Нажмите <b>«Поделиться»</b> — квадрат со стрелкой справа в адресной строке.');
+    put('Выберите <b>«На экран „Домой“»</b> (если пункта нет — пролистайте список).');
+    put('Нажмите <b>«Добавить»</b>.');
+    put('Если не получилось — откройте эту ссылку в Safari и добавьте значок оттуда.');
+    extraButton('Скопировать ссылку', copyLink);
+  } else if (ENV.ios) {
+    $('installLead').textContent = 'Чтобы значок появился на домашнем экране, эту страницу нужно открыть в Safari — этот браузер так не умеет.';
     $('installIllust').innerHTML = shareIllustration();
     put('Скопируйте ссылку этой страницы (кнопка ниже).');
     put('Откройте <b>Safari</b> — стандартный браузер с синим компасом.');
     put('Вставьте ссылку в адресную строку и откройте.');
     put('Нажмите <b>«Поделиться»</b> → <b>«На экран „Домой“»</b>.');
-    const copy = document.createElement('button');
-    copy.className = 'btn ghost';
-    copy.textContent = 'Скопировать ссылку';
-    copy.addEventListener('click', async () => {
-      try { await navigator.clipboard.writeText(location.href); toast('Ссылка скопирована'); }
-      catch { toast(location.href); }
-    });
-    steps.after(copy);
-  } else if (isAndroid) {
+    extraButton('Скопировать ссылку', copyLink);
+  } else if (ENV.android && ENV.inApp) {
+    $('installLead').textContent = 'Ссылка открыта внутри мессенджера — отсюда приложение не установить. Откройте её в Chrome.';
+    $('installIllust').innerHTML = androidInstallIllustration();
+    put('Нажмите <b>«•••»</b> справа вверху и выберите <b>«Открыть в браузере»</b> — или скопируйте ссылку и вставьте в Chrome.');
+    put('В Chrome: три точки → <b>«Установить приложение»</b>.');
+    extraButton('Скопировать ссылку', copyLink);
+  } else if (ENV.android) {
     $('installIllust').innerHTML = androidInstallIllustration();
     if (deferredInstall) {
       $('installNow').classList.remove('hidden');
@@ -458,14 +591,21 @@ function showInstallGuide() {
     }
   } else {
     $('installLead').textContent = 'Приложение уже работает. На телефоне его можно добавить на домашний экран и открывать как обычное приложение.';
-    put('В браузере на телефоне откройте эту же ссылку.');
-    put('iPhone: «Поделиться» → «На экран „Домой“».');
-    put('Android: меню браузера → «Установить приложение».');
+    $('installIllust').innerHTML = '';
+    put(`Откройте на телефоне <b>${escapeHtml(location.host)}</b>.`);
+    put('iPhone: Safari → «Поделиться» (в iOS 26 — за «•••») → «На экран „Домой“».');
+    put('Android: Chrome → три точки → «Установить приложение».');
   }
   $('install').classList.remove('hidden');
 }
 
-function showOnboarding() { $('onboarding').classList.remove('hidden'); $('app').classList.add('hidden'); goStep(0); }
+function showOnboarding() {
+  $('onboarding').classList.remove('hidden');
+  $('app').classList.add('hidden');
+  let saved = 0;
+  try { saved = Number(localStorage.getItem(OB_STEP_KEY)) || 0; } catch {}
+  goStep(saved);
+}
 function showApp() { $('onboarding').classList.add('hidden'); $('install').classList.add('hidden'); $('app').classList.remove('hidden'); }
 
 function switchTab(name) {

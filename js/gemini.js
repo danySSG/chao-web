@@ -515,16 +515,27 @@ function photoIsEmpty(r) {
 }
 
 export const gemini = {
+  /// Проверка ключа списком моделей: квоту генерации не тратит и не зависит от
+  /// того, перегружена ли сейчас какая-то модель (раньше «Проверить» отвечал
+  /// английским «The model is overloaded», и человек решал, что ключ не тот).
+  /// kind ошибки: badkey — ключ не подходит; region — российский адрес;
+  /// unknown — проверить не удалось (сеть, перегрузка), ключ, может быть, и хорош.
   async checkKey(key) {
-    const res = await fetch(`${REST_BASE}/${CHAIN_DIALOG[0]}:generateContent`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-      body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'Ответь одним словом: OK' }] }] }),
-    });
+    let res;
+    try {
+      res = await fetch(`${REST_BASE}?pageSize=1`, {
+        headers: { 'x-goog-api-key': key },
+        signal: AbortSignal.timeout?.(10000),
+      });
+    } catch {
+      throw new GeminiError('Не удалось проверить ключ — нет связи с Google. Проверим при первом переводе.', 'unknown');
+    }
     if (res.ok) return true;
     let msg = '';
     try { msg = (await res.json())?.error?.message || ''; } catch {}
-    throw new GeminiError(friendly(res.status, msg), 'api');
+    if (/location is not supported|not available in your (country|region)/i.test(msg)) throw new GeminiError(REGION_MSG, 'region');
+    if ([400, 401, 403].includes(res.status)) throw new GeminiError(friendly(403, msg), 'badkey');
+    throw new GeminiError(`Google сейчас не отвечает (код ${res.status}) — проверим при первом переводе.`, 'unknown');
   },
 
   /// Кэш — запасной путь на случай без сети, а не экономия: перевод зависит

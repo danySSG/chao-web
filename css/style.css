@@ -581,5 +581,13 @@ a.btn { text-decoration: none; }
 .ob-facts b { font-size: 15px; }
 .ob-facts span { font-size: 13px; color: var(--muted); }
 
+.ob-sub { font-size: 18px; font-weight: 800; text-align: center; margin: 8px 0 0; }
+/* Ссылка открылась во встроенном браузере мессенджера */
+.ob-warn {
+  background: var(--card); border: 1.5px solid var(--orange); border-radius: 16px;
+  padding: 13px 15px; font-size: 14px; line-height: 1.45; display: grid; gap: 10px;
+}
+.ob-key-ok { color: var(--green); }
+.ob-key-bad { color: var(--red); }
 .ob-nav { display: flex; gap: 10px; margin-top: 6px; }
 .ob-nav .btn { flex: 1; }
