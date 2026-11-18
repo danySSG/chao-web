@@ -297,20 +297,31 @@ if ('speechSynthesis' in window) {
   speechSynthesis.addEventListener?.('voiceschanged', () => speechSynthesis.getVoices());
 }
 
-/** Сжатие фото перед отправкой: длинная сторона до maxSide, JPEG. */
-export function compressImage(file, maxSide = 1600, quality = 0.72) {
+/** Сжатие фото перед отправкой, JPEG. Ограничиваем площадь (maxArea), а не
+ *  только длинную сторону: длинное меню из Zalo 1080×5400 иначе ужималось
+ *  в полосу 320×1600 со шрифтом 8–12 px. Обычное фото 4:3 — как и было, 1600×1200. */
+export function compressImage(file, maxSide = 4096, quality = 0.72, maxArea = 1600 * 1200) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     const url = URL.createObjectURL(file);
     img.onload = () => {
       URL.revokeObjectURL(url);
-      const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
-      const w = Math.round(img.width * scale), h = Math.round(img.height * scale);
-      const canvas = document.createElement('canvas');
-      canvas.width = w; canvas.height = h;
-      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-      const dataUrl = canvas.toDataURL('image/jpeg', quality);
-      resolve({ dataUrl, base64: dataUrl.split(',')[1] });
+      // Исключение в обработчике само промис не отклонит — добавление фото ждало бы вечно.
+      try {
+        const scale = Math.min(1, maxSide / Math.max(img.width, img.height), Math.sqrt(maxArea / (img.width * img.height)));
+        const w = Math.round(img.width * scale), h = Math.round(img.height * scale);
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        // По умолчанию сглаживание грубое — мелкий шрифт и знаки тона расплываются.
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, 0, 0, w, h);
+        const dataUrl = canvas.toDataURL('image/jpeg', quality);
+        resolve({ dataUrl, base64: dataUrl.split(',')[1] });
+      } catch (e) {
+        reject(e);
+      }
     };
     img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Не удалось прочитать фото')); };
     img.src = url;

@@ -319,8 +319,13 @@ select {
 .dish-price { font-size: 14px; font-weight: 800; color: var(--accent); background: var(--accent-soft); padding: 4px 10px; border-radius: 30px; white-space: nowrap; }
 .dish-orig { font-size: 13px; color: var(--muted); margin-top: 4px; }
 .dish-ing { font-size: 13px; color: var(--muted); font-style: italic; margin-top: 3px; }
-.counter { display: flex; align-items: center; justify-content: flex-end; gap: 14px; margin-top: 8px; }
-.counter button { font-size: 26px; color: var(--accent); line-height: 1; }
+/* Ширина — только под «− 2 +»: тап в счётчике мимо кнопок ничего не делает,
+   а левее, по самой карточке, по-прежнему снимает блюдо */
+.counter { display: flex; align-items: center; justify-content: flex-end; gap: 14px; margin-top: 8px; width: fit-content; margin-left: auto; }
+/* Зона нажатия 44×44, а на вид всё как прежде: паддинг съедает отрицательное поле */
+.counter button { font-size: 26px; color: var(--accent); line-height: 1; padding: 9px; margin: -9px -3px; }
+/* Тап по иконке должен доставаться кнопке: у svg нет data-act */
+.counter svg { pointer-events: none; }
 .counter b { font-size: 19px; min-width: 24px; text-align: center; }
 .block-card { background: var(--card); border-radius: 16px; padding: 14px; margin-bottom: 10px; }
 .block-card .orig { font-size: 13px; color: var(--muted); margin-bottom: 5px; }

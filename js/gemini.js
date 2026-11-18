@@ -414,8 +414,9 @@ function looksDegenerate(text) {
 /// предложения вообще без кириллицы. Так выглядит съезд модели в служебную речь
 /// («…Navigation phone: … strict formatting guaranteed correctly output…»),
 /// который по повторам не ловится — слова там каждый раз разные.
-/// Для ответов чата дополнительно требуем служебную лексику: там длинная
-/// вьетнамская фраза без перевода — законный хвост, а не мусор.
+/// Для ответов чата и полей фото дополнительно требуем служебную лексику:
+/// длинная вьетнамская фраза, название, адрес, сайт или Wi-Fi латиницей —
+/// законный хвост, а не мусор.
 function cutLatinTail(text, requireService = false) {
   if (!text || !/[а-яё]/i.test(text.slice(0, 200))) return text;
   // Граница предложения — точка перед словом с заглавной: иначе «тел. 0236…»
@@ -441,10 +442,12 @@ function trimToHuman(text) {
 }
 
 /// summary и translation обязаны быть по-русски, поэтому чистим их обоими способами.
+/// Хвост режем только со служебной лексикой: без неё отрезались законные
+/// «Hotline: …», «Facebook: …», «Password: …» в конце «Сути» с визитки.
 function cleanRussianField(text) {
   if (!text) return text;
   const out = looksDegenerate(text) ? trimToHuman(text) : text;
-  return cutLatinTail(out);
+  return cutLatinTail(out, true);
 }
 
 function repairPhotoResult(r) {

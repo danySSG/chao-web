@@ -30,7 +30,10 @@ let pendingRetry = null;
 const MAX_PHOTOS = 6;
 // Документ, с которым сейчас работаем: страницы со своим разбором у каждой,
 // собранный по ним заказ и вопросы по документу целиком.
-let photo = { pages: [], order: new Map(), chat: [], asking: false, historyId: null };
+let photo = newPhotoDoc();
+// Растёт только по «Новый снимок». Пачка, которая ещё сжимается, так отличает
+// отмену от документа, опустевшего после крестика (это тоже новый объект).
+let photoEpoch = 0;
 
 // ------------------------------------------------------------------ запуск
 
@@ -829,37 +832,66 @@ function newSession() {
 
 // ------------------------------------------------------------------ фото
 
+/// queue — очередь разборов страниц этого документа (см. queueAnalysis).
+function newPhotoDoc() {
+  return { pages: [], order: new Map(), chat: [], asking: false, historyId: null, queue: Promise.resolve() };
+}
+
 async function addPhotos(files) {
   const list = [...(files || [])];
   if (!list.length) return;
+  // Если за время сжатия нажали «Новый снимок», страницы старого документа
+  // не должны попасть в новый.
+  const epoch = photoEpoch;
 
   const free = MAX_PHOTOS - photo.pages.length;
   if (free <= 0) { toast(`Больше ${MAX_PHOTOS} страниц за раз не получится`); return; }
   if (list.length > free) toast(`Возьму первые ${plural(free, 'страницу', 'страницы', 'страниц')} — это предел`);
 
+  const picked = list.slice(0, free);
   const added = [];
-  try {
-    for (const file of list.slice(0, free)) {
-      const { dataUrl, base64 } = await compressImage(file);
-      const page = { dataUrl, base64, result: null, analyzing: true, error: null };
-      photo.pages.push(page);
-      added.push(page);
-      renderPhoto();
+  let broken = 0;
+  for (const file of picked) {
+    let img;
+    // Нечитаемый файл пропускаем: раньше на нём обрывалась вся пачка,
+    // и следующие страницы молча терялись.
+    try {
+      img = await compressImage(file);
+    } catch (e) {
+      broken++;
+      log(`фото: не открылся файл (${file.type || 'тип неизвестен'}, ${Math.round((file.size || 0) / 1024)} КБ): ${e.message}`);
+      continue;
     }
-  } catch (e) {
-    log(`фото: ${e.message}`);
-    toast(e.message);
+    if (epoch !== photoEpoch) return;
+    // Пишем в текущий документ: если крестиком убрали все страницы, пока
+    // остальные сжимались, это не отмена — иначе выбранные фото пропали бы молча.
+    const page = { dataUrl: img.dataUrl, base64: img.base64, result: null, analyzing: true, error: null };
+    photo.pages.push(page);
+    added.push(page);
+    renderPhoto();
   }
-  // Страницы разбираются по очереди: каждая знает разделы предыдущих и
-  // дописывается к общему списку, поэтому готовое с экрана не пропадает.
-  for (const page of added) await analyzePage(page);
+  if (epoch !== photoEpoch) return;
+  if (broken) toast(picked.length === 1 ? 'Не удалось прочитать фото' : `Не открылось ${broken} из ${picked.length} фото`);
+  // Убранные крестиком страницы очередь пропустит сама (analyzePage).
+  for (const page of added) queueAnalysis(photo, page);
+}
+
+/// Страницы разбираются по очереди: каждая знает разделы предыдущих и
+/// дописывается к общему списку, поэтому готовое с экрана не пропадает.
+/// Очередь общая на документ, а не на пачку: страница из «Снять ещё» или
+/// повтора иначе уходила в модель вслепую, пока предыдущая ещё разбиралась.
+function queueAnalysis(doc, page) {
+  page.analyzing = true;
+  page.error = null;
+  // catch: сбой на одной странице не должен навсегда остановить очередь
+  doc.queue = doc.queue.then(() => analyzePage(doc, page)).catch(e => log(`фото: ${e.message}`));
 }
 
 /// Что уже известно о документе — подсказка модели, чтобы разделы совпали.
-function knownSoFar() {
+function knownSoFar(doc) {
   const titles = new Set();
   let isMenu = false;
-  for (const p of photo.pages) {
+  for (const p of doc.pages) {
     if (!p.result) continue;
     if (p.result.isMenu) isMenu = true;
     for (const sec of p.result.sections || []) if (sec.title) titles.add(sec.title);
@@ -867,25 +899,37 @@ function knownSoFar() {
   return { isMenu, sections: [...titles] };
 }
 
-async function analyzePage(page) {
-  page.analyzing = true;
-  page.error = null;
-  renderPhoto();
+async function analyzePage(doc, page) {
+  // Пока страница ждала очереди, её убрали крестиком или начали новый
+  // снимок — запрос не тратим.
+  if (doc !== photo || !doc.pages.includes(page)) { page.analyzing = false; return; }
+  let result = null, error = null;
   try {
-    page.result = await gemini.translatePhoto([page.base64], knownSoFar());
+    result = await gemini.translatePhoto([page.base64], knownSoFar(doc));
   } catch (e) {
     log(`фото: ${e.message}`);
-    page.error = e.message;
+    error = e.message;
   }
   page.analyzing = false;
+  // Убрали, пока ждали ответ, — результат выбрасываем.
+  if (!doc.pages.includes(page)) return;
+  if (error) page.error = error; else page.result = result;
+  // Документ сменили — разбор остаётся в нём, на экран чужого не выводим.
+  if (doc !== photo) return;
   renderPhoto();
-  if (photo.pages.some(p => p.result)) savePhotoToHistory();
+  if (doc.pages.some(p => p.result)) savePhotoToHistory(doc);
+}
+
+/// Повтор неудачных страниц — через ту же очередь, чтобы и они знали разделы.
+function retryPages(pages) {
+  pages.forEach(p => queueAnalysis(photo, p));
+  renderPhoto();
 }
 
 /// Общий вид документа — склейка разборов всех страниц. Разделы с одинаковым
 /// названием объединяются, поэтому меню на трёх листах читается одним списком.
-function mergedResult() {
-  const done = photo.pages.filter(p => p.result);
+function mergedResult(doc = photo) {
+  const done = doc.pages.filter(p => p.result);
   if (!done.length) return null;
   const merged = { isMenu: done.some(p => p.result.isMenu), summary: '', blocks: [], sections: [] };
   const byTitle = new Map();
@@ -915,25 +959,29 @@ function removePhotoAt(index) {
   savePhotoToHistory();
 }
 
+/// announce — это «Новый снимок» по кнопке, а не опустевший после крестика документ.
 function resetPhoto(announce) {
   const saved = announce && photo.historyId;
-  photo = { pages: [], order: new Map(), chat: [], asking: false, historyId: null };
+  if (announce) photoEpoch++;
+  photo = newPhotoDoc();
   $('photoAsk').value = '';
   renderPhoto();
   if (saved) toast('Снимок сохранён в историю');
 }
 
-async function savePhotoToHistory() {
-  const result = mergedResult();
-  const first = photo.pages.find(p => p.result);
+/// doc — свой документ, а не текущий: пока сжималось превью, могли нажать
+/// «Новый снимок», и номер записи ушёл бы в чужой документ.
+async function savePhotoToHistory(doc = photo) {
+  const result = mergedResult(doc);
+  const first = doc.pages.find(p => p.result);
   if (!result || !first) return;
   try {
     // Для истории — маленькое превью, чтобы не выесть хранилище.
     const blob = await (await fetch(first.dataUrl)).blob();
     const { dataUrl: thumb } = await compressImage(blob, 420, 0.55);
-    if (photo.historyId) store.removePhoto(photo.historyId);
-    photo.historyId = crypto.randomUUID();
-    store.addPhoto({ id: photo.historyId, ts: Date.now(), thumb, result });
+    if (doc.historyId) store.removePhoto(doc.historyId);
+    doc.historyId = crypto.randomUUID();
+    store.addPhoto({ id: doc.historyId, ts: Date.now(), thumb, result });
   } catch {}
 }
 
@@ -942,31 +990,35 @@ async function savePhotoToHistory() {
 async function askAboutPhoto() {
   const input = $('photoAsk');
   const text = input.value.trim();
-  if (!text || photo.asking || !photo.pages.length) return;
+  // Ответ пишем в документ, о котором спрашивали: пока ждали, могли начать
+  // новый снимок, и ответ про старое меню оказался бы в чужом чате.
+  const doc = photo;
+  if (!text || doc.asking || !doc.pages.length) return;
 
   input.value = '';
-  photo.chat.push({ role: 'user', text });
-  photo.asking = true;
-  renderPhoto();
+  doc.chat.push({ role: 'user', text });
+  doc.asking = true;
+  renderPhoto({ toChat: true });
   updatePhotoBar();
 
   // Основная модель периодически перегружена, и ответ занимает до минуты —
   // без этой подписи человек решает, что приложение зависло.
   const slow = setTimeout(() => {
-    const label = $('askingLabel');
+    const label = doc === photo && $('askingLabel');
     if (label) label.textContent = 'Всё ещё думаю — иногда это занимает до минуты';
   }, 12000);
 
   try {
-    const answer = await gemini.askPhoto(photo.pages.map(p => p.base64), photo.chat);
-    photo.chat.push({ role: 'model', text: answer });
+    const answer = await gemini.askPhoto(doc.pages.map(p => p.base64), doc.chat);
+    doc.chat.push({ role: 'model', text: answer });
   } catch (e) {
     log(`вопрос по фото: ${e.message}`);
-    photo.chat.push({ role: 'model', text: e.message, failed: true });
+    doc.chat.push({ role: 'model', text: e.message, failed: true });
   }
   clearTimeout(slow);
-  photo.asking = false;
-  renderPhoto();
+  doc.asking = false;
+  if (doc !== photo) return;
+  renderPhoto({ toChat: true });
   updatePhotoBar();
 }
 
@@ -1005,8 +1057,18 @@ function chatHTML(result) {
   return html + '</div>';
 }
 
-function renderPhoto() {
+/// toChat — в чате появилось новое (вопрос, «Думаю…», ответ): показать его.
+/// fromDish — тап по блюду или «+»/«−»: на месте должно остаться само блюдо.
+function renderPhoto({ toChat = false, fromDish = false } = {}) {
   const box = $('photoResult');
+  // Экран собирается заново целиком, поэтому прокрутку держим сами: иначе тап
+  // по блюду уводил экран к чату, а ленту страниц — в начало.
+  const scroller = $('photoContent');
+  const top = scroller.scrollTop;
+  const left = box.querySelector('.strip')?.scrollLeft || 0;
+  // Ответ, который сейчас читают, держим на том же месте экрана: дочитанная
+  // страница добавляет блюда выше чата и иначе вытеснила бы его вниз.
+  const msgTop = fromDish ? null : readingTop(box.querySelector('.qa > .qa-msg:last-child'), scroller);
   box.innerHTML = '';
   updatePhotoBar();
 
@@ -1054,7 +1116,7 @@ function renderPhoto() {
     box.insertAdjacentHTML('beforeend',
       `<div class="error">${escapeHtml(failed[0].error)}</div>
        <button class="btn ghost retry" id="photoRetry">Попробовать ещё раз</button>`);
-    box.querySelector('#photoRetry').addEventListener('click', () => failed.forEach(analyzePage));
+    box.querySelector('#photoRetry').addEventListener('click', () => retryPages(failed));
   } else if (!busy && !result) {
     box.insertAdjacentHTML('beforeend',
       `<div class="skeleton-card"><span class="sk sk-title"></span><span class="sk sk-line"></span></div>`);
@@ -1063,7 +1125,7 @@ function renderPhoto() {
     box.insertAdjacentHTML('beforeend',
       `<div class="page-failed">${plural(failed.length, 'Страницу', 'Страницы', 'Страниц')} не удалось разобрать —
        <button class="linkish" id="retryFailed">попробовать ещё раз</button></div>`);
-    box.querySelector('#retryFailed').addEventListener('click', () => failed.forEach(analyzePage));
+    box.querySelector('#retryFailed').addEventListener('click', () => retryPages(failed));
   }
 
   // Вопросы доступны всегда, пока есть снимки — даже если разбор не удался.
@@ -1076,7 +1138,25 @@ function renderPhoto() {
     speaker.speak(el.dataset.say, 'vi-VN');
     haptic(10);
   }));
-  if (photo.chat.length) box.lastElementChild.lastElementChild?.scrollIntoView({ block: 'nearest' });
+  box.querySelector('.strip').scrollLeft = left;
+  const msg = box.querySelector('.qa > .qa-msg:last-child');
+  const want = !toChat && msgTop != null && msg ? scroller.scrollTop + msg.getBoundingClientRect().top - msgTop : top;
+  // Пишем, только если сбилось, — чтобы не мешать прокрутке, которую ведёт палец.
+  if (Math.abs(scroller.scrollTop - want) >= 1) scroller.scrollTop = want;
+  if (toChat && msg) msg.scrollIntoView({ block: 'nearest' });
+}
+
+/// Верх последнего сообщения на экране, если его сейчас читают: оно видно
+/// целиком или занимает середину экрана. Краешек снизу не в счёт — тогда
+/// человек смотрит на блюда выше.
+function readingTop(msg, scroller) {
+  if (!msg) return null;
+  const c = scroller.getBoundingClientRect();
+  if (!c.height) return null;  // вкладка «Фото» скрыта
+  const r = msg.getBoundingClientRect();
+  const mid = c.top + c.height / 2;
+  const whole = r.top >= c.top && r.bottom <= c.bottom;
+  return whole || (r.top <= mid && r.bottom >= mid) ? r.top : null;
 }
 
 /// Показываем всё, что разобралось, а не только «профильную» половину:
@@ -1129,13 +1209,17 @@ function bindDishHandlers(box) {
   box.querySelectorAll('.dish').forEach(el => {
     el.addEventListener('click', (e) => {
       const key = el.dataset.key;
-      const act = e.target.dataset?.act;
+      // closest: тап по иконке внутри «+»/«−» приходит от svg, у которого нет data-act
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      // Промах мимо «+»/«−» — по цифре или в зазор — не должен снимать блюдо
+      // со всеми порциями, как тап по карточке.
+      if (!act && e.target.closest('.counter')) return;
       const cur = photo.order.get(key) || 0;
       if (act === 'plus') photo.order.set(key, Math.min(cur + 1, 20));
       else if (act === 'minus') { if (cur <= 1) photo.order.delete(key); else photo.order.set(key, cur - 1); }
       else if (cur) photo.order.delete(key);
       else { photo.order.set(key, 1); haptic(10); }
-      renderPhoto();
+      renderPhoto({ fromDish: true });
     });
   });
 }
@@ -1168,11 +1252,14 @@ function updatePhotoBar() {
 
 function showOrder() {
   const items = [];
+  // Одно и то же блюдо встречается дважды (блок «Best seller», перекрытие
+  // снимков), а заказ у него один — иначе официант увидит и услышит его дважды.
+  const seen = new Set();
   for (const section of mergedResult()?.sections || []) {
     for (const dish of section.items || []) {
       const key = dish.original + '|' + dish.translation;
       const n = photo.order.get(key);
-      if (n) items.push({ dish, n });
+      if (n && !seen.has(key)) { seen.add(key); items.push({ dish, n }); }
     }
   }
   if (!items.length) return;
