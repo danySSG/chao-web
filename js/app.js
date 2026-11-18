@@ -1363,8 +1363,15 @@ async function translateAndAdd(fn, retry, retryLabel, detail) {
       log('перевод пустой — показываю как неудачу');
       addFailure(detail?.startsWith('«') ? 'Не понял текст — попробуйте написать иначе.' : 'Не разобрал речь. Попробуйте ещё раз или поднесите телефон ближе.', retry, retryLabel, detail);
     } else {
-      addMessage({ id: crypto.randomUUID(), ts: Date.now(), sourceLanguage: r.sourceLanguage, transcript: r.transcript, translation });
-      if (r.sourceLanguage === 'ru') speaker.speak(translation, 'vi-VN');
+      const message = { id: crypto.randomUUID(), ts: Date.now(), sourceLanguage: r.sourceLanguage, transcript: r.transcript, translation };
+      addMessage(message);
+      // Сказанное — озвучиваем. Набранное — показываем крупно и молча: текст
+      // пишут, когда вслух неудобно (зал, ночь, личное); «Озвучить» на экране.
+      // Вставленный вьетнамский (сообщение из Zalo) просто ложится в ленту.
+      if (r.sourceLanguage === 'ru') {
+        if (detail?.startsWith('«')) openBig(message);
+        else speaker.speak(translation, 'vi-VN');
+      }
     }
     idleStatus();
   } catch (e) {
