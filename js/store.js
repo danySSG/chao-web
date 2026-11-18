@@ -7,7 +7,6 @@ const K_CURRENT = 'chao.current';
 const K_SESSIONS = 'chao.sessions';
 const K_PHOTOS = 'chao.photos';
 const K_TRCACHE = 'chao.trcache';
-const K_LIVEMODEL = 'chao.livemodel';
 const K_INSTALL = 'chao.install';
 
 const MAX_CURRENT = 300;
@@ -79,8 +78,6 @@ export const store = {
     }
     return id;
   },
-  getLiveModel() { return localStorage.getItem(K_LIVEMODEL) || ''; },
-  setLiveModel(v) { if (v) localStorage.setItem(K_LIVEMODEL, v); else localStorage.removeItem(K_LIVEMODEL); },
   /// Новый ключ — новые лимиты: паузы моделей от старого ключа к нему не относятся.
   setKey(k) {
     if (k.trim() !== this.getKey()) localStorage.removeItem('chao.quota');

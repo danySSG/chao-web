@@ -2,6 +2,12 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
+<script>
+  // Копия на GitHub Pages — старый вход: учёт установок и обещания о приватности
+  // там не действуют. Ведём на рабочий адрес.
+  if (location.hostname.endsWith('github.io')) location.replace('https://chao.svoivietnam.com/');
+</script>
+<link rel="canonical" href="https://chao.svoivietnam.com/">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
@@ -110,54 +116,37 @@
   <!-- ДИАЛОГ -->
   <section class="screen" id="tab-dialog">
     <header class="bar">
-      <button class="icon-btn" id="histBtn" title="История"><span data-icon="history" data-icon-size="21"></span></button>
+      <button class="icon-btn" id="histBtn" title="История" aria-label="История"><span data-icon="history" data-icon-size="21"></span></button>
       <h2>Диалог</h2>
-      <button class="icon-btn" id="phrasesBtn" title="Готовые фразы"><span data-icon="book" data-icon-size="20"></span></button>
-      <button class="icon-btn" id="newBtn" title="Новый разговор"><span data-icon="edit" data-icon-size="20"></span></button>
+      <button class="icon-btn" id="phrasesBtn" title="Готовые фразы" aria-label="Готовые фразы"><span data-icon="book" data-icon-size="20"></span></button>
+      <button class="icon-btn" id="newBtn" title="Новый разговор" aria-label="Новый разговор"><span data-icon="edit" data-icon-size="20"></span></button>
     </header>
-    <div class="offline-bar hidden" id="offlineBar"><span data-icon="offline" data-icon-size="16"></span>Нет сети — работает разговорник</div>
+    <button class="offline-bar hidden" id="offlineBar"><span data-icon="offline" data-icon-size="16"></span>Нет сети — открыть разговорник</button>
     <div class="banner" id="speakBanner"></div>
-    <div class="content" id="feed">
-      <div class="empty" id="feedEmpty">
-        <div class="empty-icon" data-icon="chat" data-icon-size="52"></div>
-        <h3>Chào!</h3>
-        <p>Скажите фразу по-русски — озвучу её по-вьетнамски. Собеседник ответит в микрофон — вы прочтёте по-русски.</p>
-        <div class="modes">
-          <div class="mode"><span class="mode-ico mic" data-icon="mic" data-icon-size="19"></span>
-            <b>Микрофон — по очереди</b>Нажали, сказали фразу, нажали ещё раз. Перевод придёт следом. Годится, когда вокруг шумно или нужна одна фраза.</div>
-          <div class="mode"><span class="mode-ico wave" data-icon="wave" data-icon-size="19"></span>
-            <b>Волна — живой разговор</b>Включили один раз и просто говорите по очереди с собеседником: переводит на лету, нажимать между репликами не нужно.</div>
-        </div>
-      </div>
-    </div>
-    <div class="statusline hidden" id="statusLine"><span class="dot"></span><span id="statusText"></span><button id="statusAction">Выключить</button></div>
+    <!-- Пустой экран рисует renderFeed — одна копия текста, а не две -->
+    <div class="content" id="feed"></div>
+    <div class="statusline hidden" id="statusLine"><span class="dot"></span><span id="statusText" role="status" aria-live="polite"></span><button id="statusAction">Выключить</button></div>
     <footer class="inputbar">
-      <input type="text" id="textInput" placeholder="Написать по-русски…" autocomplete="off">
-      <button class="round live" id="liveBtn" title="Живой перевод"><span data-icon="wave" data-icon-size="26"></span></button>
-      <button class="round mic" id="micBtn" title="Записать фразу"><span data-icon="mic" data-icon-size="25"></span></button>
-      <button class="round send hidden" id="sendBtn" title="Отправить"><span data-icon="arrowUp" data-icon-size="25"></span></button>
+      <input type="text" id="textInput" placeholder="Написать или вставить сообщение…" autocomplete="off" enterkeyhint="send">
+      <button class="round cancel hidden" id="cancelRecBtn" aria-label="Отменить запись" title="Отменить запись"><span data-icon="close" data-icon-size="20"></span></button>
+      <button class="round live" id="liveBtn" title="Живой перевод" aria-label="Живой перевод — волна"><span data-icon="wave" data-icon-size="26"></span></button>
+      <button class="round mic" id="micBtn" title="Записать фразу" aria-label="Записать фразу"><span data-icon="mic" data-icon-size="25"></span></button>
+      <button class="round send hidden" id="sendBtn" title="Отправить" aria-label="Отправить"><span data-icon="arrowUp" data-icon-size="25"></span></button>
     </footer>
   </section>
 
   <!-- ФОТО -->
   <section class="screen hidden" id="tab-photo">
     <header class="bar">
-      <button class="icon-btn" id="photoHistBtn" title="История"><span data-icon="history" data-icon-size="21"></span></button>
+      <button class="icon-btn" id="photoHistBtn" title="История" aria-label="История"><span data-icon="history" data-icon-size="21"></span></button>
       <h2>Фото</h2>
-      <span id="photoResetWrap" class="hidden"><button class="icon-btn" id="photoReset" title="Новый снимок"><span data-icon="edit" data-icon-size="20"></span></button></span>
+      <span id="photoResetWrap" class="hidden"><button class="icon-btn" id="photoReset" title="Новый снимок" aria-label="Новый снимок"><span data-icon="edit" data-icon-size="20"></span></button></span>
     </header>
     <div class="content" id="photoContent">
       <input type="file" id="fileCamera" accept="image/*" capture="environment" hidden>
       <input type="file" id="fileGallery" accept="image/*" multiple hidden>
-      <div id="photoResult">
-        <div class="empty">
-          <div class="empty-icon" data-icon="scan" data-icon-size="52"></div>
-          <h3>Что тут написано?</h3>
-          <p>Снимите меню — разберу блюда и помогу собрать заказ.<br>Снимите документ или вывеску — переведу и объясню суть.</p>
-          <p class="fine">Паспорт и банковские бумаги лучше не снимать: на бесплатном тарифе Google может прочитать присланное.</p>
-          <p class="empty-note">Многостраничное меню снимайте целиком: отметьте в галерее все страницы разом — разберу их как одно меню.</p>
-        </div>
-      </div>
+      <!-- Пустой экран рисует renderPhoto -->
+      <div id="photoResult"></div>
     </div>
     <footer class="photobar">
       <button class="btn primary order hidden" id="orderBtn"><span data-icon="hand" data-icon-size="20"></span><span id="orderLabel">Показать заказ официанту</span></button>
@@ -168,7 +157,7 @@
       <div class="pick-note" id="pickNote">В галерее можно отметить сразу несколько страниц</div>
       <div class="askrow hidden" id="askRow">
         <button class="round small ghost-round" id="cameraBtn2" title="Снять ещё"><span data-icon="camera" data-icon-size="21"></span></button>
-        <input type="text" id="photoAsk" placeholder="Спросить об этом фото…" autocomplete="off">
+        <input type="text" id="photoAsk" placeholder="Спросить об этом фото…" autocomplete="off" enterkeyhint="send">
         <button class="round small send" id="photoSend" title="Спросить"><span data-icon="arrowUp" data-icon-size="21"></span></button>
       </div>
     </footer>
@@ -245,14 +234,17 @@
 
 <!-- ПОЛНОЭКРАННЫЙ ПОКАЗ -->
 <div class="overlay hidden" id="bigView">
-  <button class="close" id="bigClose"><span data-icon="close" data-icon-size="18"></span></button>
-  <button class="flip" id="bigFlip" title="Развернуть к собеседнику"><span data-icon="flip" data-icon-size="20"></span></button>
+  <button class="close" id="bigClose" aria-label="Закрыть"><span data-icon="close" data-icon-size="18"></span></button>
+  <button class="flip" id="bigFlip" title="Развернуть к собеседнику" aria-label="Развернуть к собеседнику"><span data-icon="flip" data-icon-size="20"></span></button>
   <div class="big-inner" id="bigInner">
     <p class="big-src" id="bigSrc"></p>
     <p class="big-tr" id="bigTr"></p>
   </div>
   <div class="big-actions">
     <button class="btn white" id="bigSpeak"><span data-icon="speaker" data-icon-size="21"></span>Озвучить</button>
+    <button class="btn white round-white" id="bigCopy" aria-label="Копировать" title="Копировать — например, чтобы отправить в Zalo"><span data-icon="copy" data-icon-size="21"></span></button>
+    <button class="btn white round-white hidden" id="bigShare" aria-label="Поделиться" title="Поделиться"><span data-icon="share" data-icon-size="21"></span></button>
+    <button class="btn white round-white" id="bigClose2" aria-label="Закрыть" title="Закрыть"><span data-icon="close" data-icon-size="17"></span></button>
   </div>
 </div>
 
@@ -260,7 +252,7 @@
 <div class="overlay sheet hidden" id="history">
   <header class="bar">
     <h2>История</h2>
-    <button class="icon-btn" id="histClose"><span data-icon="close" data-icon-size="18"></span></button>
+    <button class="icon-btn" id="histClose" aria-label="Закрыть"><span data-icon="close" data-icon-size="18"></span></button>
   </header>
   <div class="segmented">
     <button class="seg active" data-seg="dialogs">Диалоги</button>
@@ -273,7 +265,7 @@
 <div class="overlay sheet hidden" id="phrases">
   <header class="bar">
     <h2>Готовые фразы</h2>
-    <button class="icon-btn" id="phrasesClose"><span data-icon="close" data-icon-size="18"></span></button>
+    <button class="icon-btn" id="phrasesClose" aria-label="Закрыть"><span data-icon="close" data-icon-size="18"></span></button>
   </header>
   <p class="fine center" style="margin:8px 16px 0">Работают без интернета. Тап — озвучить и показать собеседнику.</p>
   <div class="content" id="phrasesContent"></div>

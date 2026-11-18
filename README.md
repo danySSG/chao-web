@@ -4,7 +4,7 @@
 работать в браузере на iPhone так же, как в нативном приложении.
 
 Рабочая версия: https://chao.svoivietnam.com/ (сервер rendermix-netcup, /var/www/chao — git-клон этого репозитория).
-Копия на GitHub Pages (https://danyssg.github.io/chao-web/) — старый прототип, пользователей туда не вести.
+Копия на GitHub Pages (https://danyssg.github.io/chao-web/) — старый вход: index.html сразу уводит оттуда на рабочий адрес. Совсем выключить — Settings → Pages в репозитории.
 
 Что проверяем:
 - доступ к микрофону в PWA, добавленной на домашний экран;

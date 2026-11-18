@@ -20,7 +20,10 @@ let live = null;
 let liveOn = false;
 let recording = false;
 let busy = false;
-let wakeLock = null;
+// Экран не гаснет, пока он кому-то нужен: волна, показ собеседнику, запись.
+// Владельцев несколько, замок один — отпускаем, когда не осталось никого.
+const screenHolders = new Set();
+let screenLock = null;
 let messages = store.getCurrent();
 // Последняя неудачная попытка перевода: держим исходник (запись или текст) в памяти,
 // чтобы повторить БЕЗ просьбы сказать ещё раз — в разговоре это дорогого стоит.
@@ -72,7 +75,19 @@ function boot() {
   });
   $('textInput').addEventListener('focus', () => setTypingPause(true));
   $('textInput').addEventListener('blur', () => { if (!$('textInput').value.trim()) setTypingPause(false); });
-  $('textInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { speaker.unlock(); sendText(); } });
+  // Enter посреди набора вьетнамской раскладкой (Telex) — это выбор буквы,
+  // а не отправка; после отправки прячем клавиатуру — экран показывают собеседнику.
+  const isSendKey = (e) => e.key === 'Enter' && !e.isComposing && e.keyCode !== 229;
+  $('textInput').addEventListener('keydown', (e) => {
+    if (!isSendKey(e)) return;
+    e.preventDefault();
+    speaker.unlock();
+    sendText();
+    $('textInput').blur();
+  });
+  // iOS иногда оставляет страницу сдвинутой после клавиатуры — возвращаем на место
+  addEventListener('focusout', () => requestAnimationFrame(() => { if (!document.activeElement || document.activeElement === document.body) scrollTo(0, 0); }));
+  $('cancelRecBtn').addEventListener('click', () => { cancelRecording(); toast('Запись отменена'); });
   $('statusAction').addEventListener('click', () => {
     if (statusFn) { const fn = statusFn; setStatus(''); fn(); }
     else if (liveOn) stopLive();
@@ -98,7 +113,12 @@ function boot() {
   $('fileCamera').addEventListener('change', (e) => { addPhotos(e.target.files); e.target.value = ''; });
   $('fileGallery').addEventListener('change', (e) => { addPhotos(e.target.files); e.target.value = ''; });
   $('orderBtn').addEventListener('click', showOrder);
-  $('photoAsk').addEventListener('keydown', (e) => { if (e.key === 'Enter') askAboutPhoto(); });
+  $('photoAsk').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
+    e.preventDefault();
+    askAboutPhoto();
+    $('photoAsk').blur();
+  });
   $('photoAsk').addEventListener('input', updatePhotoBar);
   $('photoSend').addEventListener('click', askAboutPhoto);
   $('photoReset').addEventListener('click', () => resetPhoto(true));
@@ -109,7 +129,17 @@ function boot() {
   document.querySelectorAll('.seg').forEach(b => b.addEventListener('click', () => openHistory(b.dataset.seg)));
 
   // полноэкранный показ
-  $('bigClose').addEventListener('click', () => $('bigView').classList.add('hidden'));
+  $('bigClose').addEventListener('click', closeBig);
+  addEventListener('resize', () => { if (!$('bigView').classList.contains('hidden')) fitBig(); });
+  $('bigClose2').addEventListener('click', closeBig);
+  $('bigCopy').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(bigText); toast('Скопировано — можно вставить в Zalo или сообщение'); haptic(12); }
+    catch { toast('Не получилось скопировать'); }
+  });
+  if (navigator.share) {
+    $('bigShare').classList.remove('hidden');
+    $('bigShare').addEventListener('click', () => navigator.share({ text: bigText }).catch(() => {}));
+  }
   $('bigFlip').addEventListener('click', () => { $('bigInner').classList.toggle('flipped'); haptic(12); });
 
   // настройки
@@ -137,6 +167,8 @@ function boot() {
     // В фоне iOS отрежет микрофон — отправляем то, что успели записать
     if (document.hidden && recording) { log('запись: приложение свернули — отправляю записанное'); toggleRecording(); }
     if (!document.hidden) checkForUpdate();
+    // В фоне система отпускает замок экрана — возвращаем, если он ещё нужен
+    if (!document.hidden && screenHolders.size && !screenLock) holdScreen([...screenHolders][0]);
   });
 
   $('updateBtn').addEventListener('click', () => checkForUpdate(true));
@@ -145,6 +177,8 @@ function boot() {
   renderIcons();
   checkForUpdate();
   renderFeed();
+  restorePhotoDoc();
+  renderPhoto();
   updateStorageInfo();
   if ('speechSynthesis' in window) speechSynthesis.getVoices();
 }
@@ -196,7 +230,9 @@ function recentlyReloadedFor(version) {
 /// Идёт ли работа, которую сотрёт перезагрузка: всё это живёт только в памяти.
 function workInProgress() {
   return liveOn || recording || busy
-    || photo.pages.length > 0 || photo.order.size > 0 || photo.chat.length > 0 || photo.asking
+    // Снимок с заказом переживает перезагрузку (chao.photo.current) — мешает
+    // только то, что ещё в пути: разбор страницы или вопрос
+    || photo.pages.some(p => p.analyzing) || photo.asking
     || !$('bigView').classList.contains('hidden')
     || $('textInput').value.trim() !== '' || $('photoAsk').value.trim() !== ''
     || messages.some(m => m.failed && retries.has(m.id));
@@ -277,6 +313,7 @@ function askConfirm(title, text) {
 function updateNetworkState() {
   const off = !navigator.onLine;
   $('offlineBar').classList.toggle('hidden', !off);
+  $('offlineBar').onclick = openPhrases;
   if (off) log('сеть пропала — доступен разговорник');
 }
 
@@ -621,7 +658,23 @@ function addMessage(msg) {
   // Карточки неудач живут только до перезагрузки: повторить их всё равно нельзя,
   // запись хранится в памяти.
   store.setCurrent(messages.filter(m => !m.failed));
-  renderFeed();
+  // Дописываем одну реплику, а не перерисовываем ленту: иначе в волне она
+  // моргала целиком на каждой реплике и выдёргивала того, кто листает вверх.
+  const feed = $('feed');
+  if (messages.length === 1 || !feed.querySelector('.msg, .msg-failed')) { renderFeed(); return; }
+  const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
+  feed.insertBefore(messageEl(msg), $('typingBubble'));
+  if (atBottom) feed.scrollTop = feed.scrollHeight;
+  maybeHintBig();
+}
+
+/// Один раз за жизнь установки — что пузырь нажимается.
+function maybeHintBig() {
+  try {
+    if (localStorage.getItem('chao.hintBig') || messages.filter(m => !m.failed).length < 1) return;
+    localStorage.setItem('chao.hintBig', '1');
+  } catch { return; }
+  setTimeout(() => toast('Тап по реплике — показать её собеседнику крупно', 3500), 1200);
 }
 
 function renderFeed() {
@@ -653,7 +706,13 @@ function renderFeed() {
     return;
   }
   feed.innerHTML = '';
-  for (const m of messages) {
+  for (const m of messages) feed.appendChild(messageEl(m));
+  feed.scrollTop = feed.scrollHeight;
+}
+
+let lastSay = { id: null, at: 0 };
+
+function messageEl(m) {
     if (m.failed) {
       const box = document.createElement('div');
       box.className = 'msg-failed';
@@ -673,31 +732,91 @@ function renderFeed() {
         again.addEventListener('click', () => retryFailed(m.id));
         box.appendChild(again);
       }
-      feed.appendChild(box);
-      continue;
+      return box;
     }
     const el = document.createElement('div');
     el.className = `msg ${m.sourceLanguage === 'ru' ? 'mine' : 'theirs'}${m.pending ? ' pending' : ''}`;
+    const trIsRu = isMostlyCyrillic(m.translation);
     const src = document.createElement('div');
     src.className = 'src';
+    src.lang = trIsRu ? 'vi' : 'ru';
     src.textContent = (m.transcript || 'живой перевод') + (m.via === 'text' ? ' · переведено текстом' : '');
     const tr = document.createElement('div');
     tr.className = 'tr';
+    tr.lang = trIsRu ? 'ru' : 'vi';
     tr.textContent = m.translation;
-    el.append(src, tr);
+    // Не расслышали — повторить вслух прямо из ленты; второй тап подряд — медленнее
+    const say = document.createElement('button');
+    say.className = 'msg-say';
+    say.setAttribute('aria-label', 'Озвучить ещё раз');
+    say.innerHTML = iconSVG('speaker', 18);
+    say.addEventListener('click', (e) => {
+      e.stopPropagation();
+      speaker.unlock();
+      const again = lastSay.id === m.id && Date.now() - lastSay.at < 6000;
+      lastSay = { id: m.id, at: Date.now() };
+      speaker.speak(m.translation, trIsRu ? 'ru-RU' : 'vi-VN', again ? 0.7 : undefined);
+    });
+    el.append(src, tr, say);
     el.addEventListener('click', () => openBig(m));
-    feed.appendChild(el);
-  }
-  feed.scrollTop = feed.scrollHeight;
+    return el;
 }
+
+let bigText = '';   // что копировать и чем делиться с экрана показа
 
 function openBig(m) {
   $('bigInner').classList.remove('flipped');
   $('bigSrc').textContent = m.transcript || '';
   $('bigTr').textContent = m.translation;
+  $('bigTr').lang = isMostlyCyrillic(m.translation) ? 'ru' : 'vi';
   const lang = isMostlyCyrillic(m.translation) ? 'ru-RU' : 'vi-VN';
   $('bigSpeak').onclick = () => speaker.speak(m.translation, lang);
+  bigText = m.translation;
+  showBig();
+}
+
+function showBig() {
   $('bigView').classList.remove('hidden');
+  // Официант переписывает заказ в блокнот — экран не должен погаснуть
+  holdScreen('big');
+  fitBig();
+}
+
+function closeBig() {
+  $('bigView').classList.add('hidden');
+  releaseScreen('big');
+}
+
+/// Размер текста под объём: короткое «Không đá» — видно издалека, длинный
+/// заказ — целиком, без прокрутки, пока хватает места.
+function fitBig() {
+  const tr = $('bigTr'), box = $('bigInner');
+  let size = 72;
+  tr.style.fontSize = size + 'px';
+  while (size > 24 && box.scrollHeight > box.clientHeight + 1) {
+    size -= 4;
+    tr.style.fontSize = size + 'px';
+  }
+  box.scrollTop = 0;
+}
+
+async function holdScreen(who) {
+  screenHolders.add(who);
+  if (screenLock || document.hidden || !navigator.wakeLock) return;
+  try {
+    const l = await navigator.wakeLock.request('screen');
+    if (!screenHolders.size || screenLock) { l.release().catch(() => {}); return; }
+    screenLock = l;
+    l.addEventListener?.('release', () => { if (screenLock === l) screenLock = null; });
+  } catch {}
+}
+
+function releaseScreen(who) {
+  screenHolders.delete(who);
+  if (screenHolders.size || !screenLock) return;
+  const l = screenLock;
+  screenLock = null;
+  l.release().catch(() => {});
 }
 
 function contextSnippet() {
@@ -866,8 +985,7 @@ function stopLive() {
   mic.onChunk = null;
   mic.stop();
   player.reset();
-  try { wakeLock?.release(); } catch {}
-  wakeLock = null;
+  releaseScreen('live');
   typingPause = false;
   $('liveBtn').classList.remove('on');
   $('micBtn').disabled = false;
@@ -883,13 +1001,7 @@ function restartLive() {
 /// Реплика, речь или текст — разговор идёт: держим экран и откладываем автостоп.
 function liveActivity() {
   lastLiveActivity = Date.now();
-  if (liveOn && !wakeLock && !document.hidden && navigator.wakeLock) {
-    navigator.wakeLock.request('screen').then((l) => {
-      if (!liveOn) { l.release().catch(() => {}); return; }
-      wakeLock = l;
-      l.addEventListener?.('release', () => { if (wakeLock === l) wakeLock = null; });
-    }).catch(() => {});
-  }
+  if (liveOn) holdScreen('live');
 }
 
 /// Раз в секунду, пока включена волна: жив ли микрофон, не встала ли связь,
@@ -904,10 +1016,9 @@ function liveWatch() {
     setStatus('Волна выключилась: 5 минут тишины', '', 'Включить снова', toggleLive);
     return;
   }
-  if (wakeLock && idle > WAKE_HOLD_MS) {
+  if (screenHolders.has('live') && idle > WAKE_HOLD_MS) {
     log('волна: 2,5 минуты без реплик — экран снова гаснет сам');
-    try { wakeLock.release(); } catch {}
-    wakeLock = null;
+    releaseScreen('live');
   }
 
   // Микрофон: кадры не идут или дорожку заглушила система (звонок, Siri,
@@ -1116,10 +1227,13 @@ async function toggleRecording() {
     updateMicIndicator();
     $('micBtn').classList.remove('rec');
     $('micBtn').innerHTML = iconSVG('mic', 25);
+    $('cancelRecBtn').classList.add('hidden');
+    $('liveBtn').classList.remove('hidden');
     showBanner(false);
     const wav = mic.stopRecording();
     mic.stop();
     keepAudioRunning(false);
+    releaseScreen('rec');
     setStatus('');
     if (!wav) { toast('Слишком коротко — скажите фразу целиком'); return; }
     // Запись остаётся в замыкании: повтор не требует говорить снова — в разговоре это важно
@@ -1143,11 +1257,14 @@ async function toggleRecording() {
   // iOS ставит звук на паузу (уведомление, Siri, наушники) — без этого запись
   // молча переставала копить звук, а на экране «идёт запись».
   keepAudioRunning(true);
+  holdScreen('rec');
   haptic(14);
   recording = true;
   updateMicIndicator();
   $('micBtn').classList.add('rec');
   $('micBtn').innerHTML = iconSVG('stop', 24);
+  $('cancelRecBtn').classList.remove('hidden');
+  $('liveBtn').classList.add('hidden');
   showBanner('rec');
   setStatus('идёт запись — нажмите ещё раз, когда закончите', '', 'Отмена');
 }
@@ -1159,8 +1276,11 @@ function cancelRecording() {
   mic.stopRecording();
   mic.stop();
   keepAudioRunning(false);
+  releaseScreen('rec');
   $('micBtn').classList.remove('rec');
   $('micBtn').innerHTML = iconSVG('mic', 25);
+  $('cancelRecBtn').classList.add('hidden');
+  $('liveBtn').classList.remove('hidden');
   showBanner(false);
   setStatus('');
 }
@@ -1450,7 +1570,10 @@ async function askAboutPhoto() {
   }, 12000);
 
   try {
-    const answer = await gemini.askPhoto(doc.pages.map(p => p.base64), doc.chat);
+    // У восстановленных страниц самих снимков нет — модели достаётся текст разбора
+    const images = doc.pages.map(p => p.base64).filter(Boolean);
+    const partial = images.length < doc.pages.length;
+    const answer = await gemini.askPhoto(images, doc.chat, partial ? JSON.stringify(mergedResult(doc)) : null);
     doc.chat.push({ role: 'model', text: answer });
   } catch (e) {
     log(`вопрос по фото: ${e.message}`);
@@ -1501,8 +1624,71 @@ function chatHTML(result) {
 /// toChat — в чате появилось новое (вопрос, «Думаю…», ответ): показать его.
 /// fromDish — тап по блюду или «+»/«−» ({ index, top }: какое по счёту и где
 /// было на экране): на месте должно остаться само блюдо.
+// Текущий снимок с заказом и вопросами переживает выгрузку приложения: iOS
+// закрывает PWA, пока человек платит по QR в банковском приложении, — и раньше
+// «Фото» оказывалось пустым. Сами страницы большие, храним только маленькие превью.
+const PHOTO_KEY = 'chao.photo.current';
+let photoSaveTimer = null;
+
+function schedulePhotoSave() {
+  clearTimeout(photoSaveTimer);
+  photoSaveTimer = setTimeout(savePhotoDoc, 400);
+}
+
+async function savePhotoDoc() {
+  const doc = photo;
+  const pages = doc.pages.filter(p => p.result);
+  if (!pages.length) { try { localStorage.removeItem(PHOTO_KEY); } catch {} return; }
+  for (const p of pages) if (p.thumb === undefined) p.thumb = await smallThumb(p.dataUrl);
+  if (doc !== photo) return;
+  const data = {
+    ts: Date.now(), historyId: doc.historyId,
+    pages: pages.map(p => ({ result: p.result, thumb: p.thumb })),
+    order: [...doc.order], chat: doc.chat.filter(m => !m.failed),
+  };
+  try { localStorage.setItem(PHOTO_KEY, JSON.stringify(data)); }
+  catch { log('фото: не хватило места сохранить текущий снимок'); }
+}
+
+async function smallThumb(dataUrl) {
+  if (!dataUrl || dataUrl.length < 30000) return dataUrl || '';
+  try { return (await compressImage(await (await fetch(dataUrl)).blob(), 200, 0.5)).dataUrl; }
+  catch { return ''; }
+}
+
+/// Страница без самого снимка: результат, превью; вопросы — по тексту разбора.
+const restoredPage = (result, thumb) => ({ dataUrl: thumb || '', thumb: thumb || '', base64: null, result, analyzing: false, error: null, restored: true });
+
+function restorePhotoDoc() {
+  let d = null;
+  try { d = JSON.parse(localStorage.getItem(PHOTO_KEY)); } catch {}
+  if (!d?.pages?.length) return;
+  // Вчерашнее меню в «Фото» не нужно — оно есть в истории
+  if (Date.now() - d.ts > 12 * 3600 * 1000) { try { localStorage.removeItem(PHOTO_KEY); } catch {} return; }
+  photo = newPhotoDoc();
+  photo.historyId = d.historyId || null;
+  photo.pages = d.pages.map(p => restoredPage(p.result, p.thumb));
+  photo.order = new Map(d.order || []);
+  photo.chat = d.chat || [];
+  log(`фото: восстановлен снимок — ${plural(photo.pages.length, 'страница', 'страницы', 'страниц')}, в заказе ${photo.order.size}`);
+}
+
+/// Меню из истории — не только посмотреть: по нему можно снова собрать заказ.
+function openPhotoFromHistory(p) {
+  photoEpoch++;   // пачка, которая ещё сжимается, в этот документ не попадёт
+  photo = newPhotoDoc();
+  photo.historyId = p.id;
+  photo.pages = [restoredPage(p.result, p.thumb)];
+  $('photoAsk').value = '';
+  $('history').classList.add('hidden');
+  switchTab('photo');
+  renderPhoto();
+  toast(p.result.isMenu ? 'Меню открыто — можно собрать заказ' : 'Документ открыт');
+}
+
 function renderPhoto({ toChat = false, fromDish = false } = {}) {
   const box = $('photoResult');
+  schedulePhotoSave();
   // Экран собирается заново целиком, поэтому прокрутку держим сами: иначе тап
   // по блюду уводил экран к чату, а ленту страниц — в начало.
   const scroller = $('photoContent');
@@ -1518,6 +1704,7 @@ function renderPhoto({ toChat = false, fromDish = false } = {}) {
     box.innerHTML = `<div class="empty"><div class="empty-icon">${iconSVG('scan', 52)}</div>
       <h3>Что тут написано?</h3>
       <p>Снимите меню — разберу блюда и помогу собрать заказ.<br>Снимите документ или вывеску — переведу и объясню суть.</p>
+      <p class="fine">Паспорт и банковские бумаги лучше не снимать: на бесплатном тарифе Google может прочитать присланное.</p>
       <p class="empty-note">Многостраничное меню снимайте целиком: отметьте в галерее все страницы разом — разберу их как одно меню.</p></div>`;
     return;
   }
@@ -1526,7 +1713,7 @@ function renderPhoto({ toChat = false, fromDish = false } = {}) {
   let strip = '<div class="strip">';
   photo.pages.forEach((page, i) => {
     strip += `<div class="strip-item${page.analyzing ? ' busy' : ''}${page.error ? ' failed' : ''}">
-      <img src="${page.dataUrl}" alt="страница ${i + 1}">
+      ${page.dataUrl ? `<img src="${page.dataUrl}" alt="страница ${i + 1}">` : `<span class="strip-ph">${iconSVG('image', 26)}</span>`}
       ${page.analyzing ? '<span class="strip-spin"></span>' : ''}
       <button class="strip-del" data-del="${i}" aria-label="убрать страницу ${i + 1}">${iconSVG('close', 15)}</button></div>`;
   });
@@ -1712,13 +1899,15 @@ function showOrder() {
   if (!items.length) return;
   $('bigInner').classList.remove('flipped');
   $('bigSrc').textContent = 'Cho tôi gọi món:';
+  $('bigTr').lang = 'vi';
   $('bigTr').innerHTML = items.map(i =>
-    `<div style="margin-bottom:18px">${i.n} × ${escapeHtml(i.dish.original)}
-      <div style="font-size:14px;font-weight:600;opacity:.65;margin-top:2px">${escapeHtml(i.dish.translation)}${i.dish.price ? ' · ' + escapeHtml(i.dish.price) : ''}</div>
+    `<div class="big-item">${i.n} × ${escapeHtml(i.dish.original)}
+      <div class="big-sub" lang="ru">${escapeHtml(i.dish.translation)}${i.dish.price ? ' · ' + escapeHtml(i.dish.price) : ''}</div>
     </div>`).join('');
   const phrase = 'Cho tôi ' + items.map(i => `${i.n} ${i.dish.original}`).join(', ');
   $('bigSpeak').onclick = () => speaker.speak(phrase, 'vi-VN');
-  $('bigView').classList.remove('hidden');
+  bigText = 'Cho tôi gọi món:\n' + items.map(i => `${i.n} × ${i.dish.original}`).join('\n');
+  showBig();
 }
 
 // ------------------------------------------------------------------ история
@@ -1769,7 +1958,7 @@ function openHistory(seg) {
       const el = swipeRow(
         `<img class="thumb" src="${p.thumb}" alt=""><div class="info"><b>${p.result.isMenu ? 'Меню' : 'Документ'}</b><small>${fmtDate(p.ts)} · ${count}</small></div>`,
         () => { store.removePhoto(p.id); openHistory('menus'); },
-        () => { box.innerHTML = `<img class="preview" src="${p.thumb}" alt="">` + renderResultHTML(p.result, false); }
+        () => openPhotoFromHistory(p)
       );
       box.appendChild(el);
     }
@@ -1784,22 +1973,34 @@ function swipeRow(innerHTML, onDelete, onOpen) {
                     <div class="swipe-card">${innerHTML}</div>`;
   const card = wrap.querySelector('.swipe-card');
   const del = wrap.querySelector('.swipe-delete');
-  let startX = 0, dx = 0, open = false, dragging = false;
+  let startX = 0, startY = 0, dx = 0, open = false, dragging = false, axis = null;
 
   const setX = (x) => { card.style.transform = `translateX(${x}px)`; };
 
   card.addEventListener('touchstart', (e) => {
-    startX = e.touches[0].clientX; dragging = true; card.style.transition = 'none';
+    startX = e.touches[0].clientX; startY = e.touches[0].clientY;
+    // От того положения, где карточка сейчас: иначе после закрытия «Удалить»
+    // старое смещение снова открывало её, и тап больше не открывал запись.
+    dx = open ? -96 : 0;
+    dragging = true; axis = null; card.style.transition = 'none';
   }, { passive: true });
 
   card.addEventListener('touchmove', (e) => {
     if (!dragging) return;
-    dx = e.touches[0].clientX - startX + (open ? -96 : 0);
+    const mx = e.touches[0].clientX - startX, my = e.touches[0].clientY - startY;
+    // Вертикальная прокрутка списка не должна двигать карточки вбок
+    if (!axis) {
+      if (Math.abs(mx) < 8 && Math.abs(my) < 8) return;
+      axis = Math.abs(mx) > Math.abs(my) ? 'x' : 'y';
+    }
+    if (axis !== 'x') return;
+    dx = mx + (open ? -96 : 0);
     setX(Math.max(-110, Math.min(0, dx)));
   }, { passive: true });
 
   card.addEventListener('touchend', () => {
     dragging = false;
+    if (axis !== 'x') return;
     card.style.transition = 'transform .22s cubic-bezier(.22,.9,.3,1)';
     open = dx < -48;
     setX(open ? -96 : 0);

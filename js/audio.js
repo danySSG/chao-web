@@ -315,13 +315,13 @@ export const speaker = {
   onSpeakingChange: null,
   speaking: false,
 
-  speak(text, lang) {
+  speak(text, lang, rate = 0.95) {
     if (!('speechSynthesis' in window) || !text) return;
     this.stop();
     if (!micInUse) setAudioMode(false);
     const u = new SpeechSynthesisUtterance(text);
     u.lang = lang;
-    u.rate = 0.95;
+    u.rate = rate;
     const voices = speechSynthesis.getVoices().filter(v => v.lang?.replace('_', '-').startsWith(lang.slice(0, 2)));
     const best = voices.find(v => /enhanced|premium|siri/i.test(v.name)) || voices[0];
     if (best) u.voice = best;
@@ -336,7 +336,7 @@ export const speaker = {
     this._guard = setTimeout(() => {
       if (!started) log('озвучка не началась — iOS ждёт нажатия');
       done();
-    }, 2000 + (text.length / 14) * 1000);
+    }, 2000 + (text.length / (14 * rate / 0.95)) * 1000);
     speechSynthesis.speak(u);
   },
 
